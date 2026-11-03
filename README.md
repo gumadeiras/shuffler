@@ -21,8 +21,12 @@ palette, Fusion style, and icon set.
 | CONEX B | Newport CONEX-CC | COM4 | read on connect |
 | DDS100 | Thorlabs KBD101 K-Cube | USB, serial 28253849 | DDS100 (100 mm direct drive) |
 
-Rename the stages in `stages.toml` to say what each one moves (for example
-"Odor X"). Do this before you save presets: a preset stores positions by stage name.
+To say which stage is which axis, rename it in the window: double-click its title
+(or use **⋯ → Rename…**) and type "X", "Odor Z", and so on. Use **⋯ → Move left /
+Move right** to put the cards in order. The labels and order are kept in
+`labels.json` and come back the next time the window opens. The card subtitle still
+shows the port and the `stages.toml` name, so the mapping stays visible. Presets
+store positions under the `stages.toml` name, so relabeling never breaks a preset.
 
 ## Set up (once)
 
@@ -93,6 +97,7 @@ A log of every command is written to `stagehand.log` next to `stages.toml`.
 |---|---|
 | `stages.toml` | this rig's stages (git-ignored; start from `stages.toml.example`) |
 | `presets.json` | saved positions (git-ignored; rewritten atomically) |
+| `labels.json` | stage labels and card order, set in the window (git-ignored) |
 | `src/stagehand/conex.py` | Newport CONEX-CC ASCII protocol (pyserial) |
 | `src/stagehand/kinesis.py` | Thorlabs K-Cubes (KBD101, KDC101, KST101) via Kinesis .NET |
 | `src/stagehand/worker.py` | one thread per stage; all motion rules |

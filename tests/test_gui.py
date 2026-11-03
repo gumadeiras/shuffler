@@ -4,17 +4,19 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from stagehand import config
 from stagehand.fakes import FakeStage
 from stagehand.gui import theme
 from stagehand.gui.app import MainWindow
 from stagehand.gui.presets_panel import GoToPresetDialog, SavePresetDialog, at_preset
+from stagehand.labels import LabelStore
 from stagehand.presets import PresetStore
 from stagehand.stage import State
 from stagehand.worker import StageWorker
@@ -154,6 +156,75 @@ class WindowTest(unittest.TestCase):
         dialog = SavePresetDialog(statuses, {"X": 4, "Z": 4}, self.window)
         self.assertEqual(dialog.positions(), {})
         self.assertFalse(dialog.checks["X"].isEnabled())
+
+    def test_target_field_is_visible_and_out_of_range_targets_are_refused(self) -> None:
+        self.window.show()
+        APP.processEvents()
+        self.window.connect_all()
+        for worker in self.workers:
+            worker.home()
+        self.run_all()
+        self.settle()
+        card = self.card("X")
+        self.assertGreater(card.target_box.width(), 100, "the field must not collapse")
+        self.assertEqual(card.target_box.text(), "12.5000")
+        card.target_box.setText("22.5")  # max is 20 in this config
+        card.target_box.returnPressed.emit()
+        self.run_all()
+        self.assertIn("outside the allowed range", self.workers[0].status.error)
+        self.assertNotIn("move_to 22.5", self.fakes["X"].commands)
+
+    def rename(self, key: str, text: str) -> None:
+        card = self.card(key)
+        with mock.patch.object(QInputDialog, "getText", return_value=(text, True)):
+            card.name_label.double_clicked.emit()
+
+    def test_rename_a_stage_in_the_window(self) -> None:
+        self.store.save("Rest", {"X": 1.0, "Z": 2.0})
+        self.window.presets.refresh()
+        self.rename("Z", "Odor Z")
+        card = self.card("Z")
+        self.assertEqual(card.name_label.text(), "Odor Z")
+        self.assertIn("SN 28253849 · Z", card.model_label.text(), "the toml name stays visible")
+        self.assertEqual(self.workers[1].label, "Odor Z")
+        header = self.window.presets.table.horizontalHeaderItem(2).text()
+        self.assertEqual(header, "Odor Z")
+        self.assertEqual(self.store.get("Rest").positions, {"X": 1.0, "Z": 2.0}, "keys unchanged")
+
+        # Persisted: a new window over the same files shows the new label.
+        self.window.timer.stop()
+        again = MainWindow(
+            self.app_config,
+            [StageWorker(s, lambda c: self.fakes[c.name]) for s in self.app_config.stages],
+            self.store,
+            settings=QSettings(str(Path(self.folder.name) / "ui2.ini"), QSettings.IniFormat),
+        )
+        self.assertEqual(
+            next(c for c in again.cards if c.worker.name == "Z").name_label.text(), "Odor Z"
+        )
+        again.timer.stop()
+
+    def test_worker_messages_use_the_label(self) -> None:
+        self.rename("X", "Odor X")
+        self.workers[0].move_to(1.0)
+        self.run_all()
+        self.assertIn("Odor X is", self.workers[0].status.error)
+
+    def test_duplicate_label_is_refused(self) -> None:
+        self.rename("X", "Same")
+        with mock.patch.object(QMessageBox, "warning") as warning:
+            self.rename("Z", "same")
+        warning.assert_called_once()
+        self.assertEqual(self.card("Z").name_label.text(), "Z")
+
+    def test_move_cards_and_preset_columns(self) -> None:
+        self.card("Z").move_requested.emit(-1)
+        self.assertEqual([c.worker.name for c in self.window.cards], ["Z", "X"])
+        self.assertEqual(self.window.presets.table.horizontalHeaderItem(1).text(), "Z")
+        self.assertFalse(self.card("Z").left_action.isEnabled())
+        self.assertTrue(self.card("Z").right_action.isEnabled())
+        labels = LabelStore(self.app_config.labels_path, self.app_config.stage_names)
+        self.assertEqual(labels.order(), ["Z", "X"])
 
 
 class ThemeTest(unittest.TestCase):

@@ -18,6 +18,7 @@ from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -33,6 +34,7 @@ from stagehand.gui import theme
 from stagehand.gui.icons import icon
 from stagehand.gui.presets_panel import PresetsPanel
 from stagehand.gui.stage_card import StageCard
+from stagehand.labels import LabelError, LabelStore
 from stagehand.presets import PresetStore
 from stagehand.rig import driver_factory
 from stagehand.worker import StageWorker
@@ -62,6 +64,7 @@ class MainWindow(QMainWindow):
         workers: Sequence[StageWorker],
         store: PresetStore,
         *,
+        labels: LabelStore | None = None,
         demo: bool = False,
         settings: QSettings | None = None,
     ) -> None:
@@ -69,6 +72,10 @@ class MainWindow(QMainWindow):
         self.app_config = app_config
         self.workers = list(workers)
         self.settings = settings or QSettings("ClarkLab", "stagehand")
+        keys = [w.name for w in self.workers]
+        self.labels = labels or LabelStore(app_config.labels_path, keys)
+        for worker in self.workers:
+            worker.label = self.labels.label(worker.name)
         self.setWindowTitle("stagehand" + (" (demo)" if demo else ""))
 
         title = QLabel("stagehand")
@@ -105,26 +112,29 @@ class MainWindow(QMainWindow):
             StageCard(w, confirm_moves=app_config.confirm_moves, settings=self.settings)
             for w in self.workers
         ]
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(theme.SECTION_GAP)
         for card in self.cards:
-            cards_row.addWidget(card)
-        cards_row.addStretch(1)
+            card.rename_requested.connect(lambda c=card: self.rename_stage(c))
+            card.move_requested.connect(lambda offset, c=card: self.move_stage(c, offset))
+        self.cards_row = QHBoxLayout()
+        self.cards_row.setSpacing(theme.SECTION_GAP)
 
         self.presets = PresetsPanel(store, self.workers, confirm_moves=app_config.confirm_moves)
         self.presets.message.connect(lambda text: self.statusBar().showMessage(text, 8000))
+        self._arrange(self.labels.order())
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.UNIT)
         layout.setSpacing(theme.SECTION_GAP)
         layout.addLayout(header)
-        layout.addLayout(cards_row)
+        layout.addLayout(self.cards_row)
         layout.addWidget(self.presets, 1)
         self.setCentralWidget(central)
 
         where = app_config.presets_path if not demo else "a temporary file (demo)"
         self.statusBar().showMessage(f"stagehand {__version__}. Presets: {where}")
+        if self.labels.load_error:
+            self.statusBar().showMessage(self.labels.load_error)
         geometry = self.settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -148,6 +158,48 @@ class MainWindow(QMainWindow):
             self.stop_all_button.style().unpolish(self.stop_all_button)
             self.stop_all_button.style().polish(self.stop_all_button)
         self.connect_all_button.setEnabled(any(not s.state.connected for s in statuses.values()))
+
+    def _arrange(self, order: Sequence[str]) -> None:
+        """Put the cards (and the preset columns) in ``order``."""
+        while self.cards_row.count():
+            self.cards_row.takeAt(0)
+        by_key = {card.worker.name: card for card in self.cards}
+        self.cards = [by_key[key] for key in order]
+        for index, card in enumerate(self.cards):
+            self.cards_row.addWidget(card)
+            card.set_position_in_row(index, len(self.cards))
+        self.cards_row.addStretch(1)
+        self.presets.set_order(order)
+
+    def rename_stage(self, card: StageCard) -> None:
+        worker = card.worker
+        text, ok = QInputDialog.getText(
+            self,
+            "Rename stage",
+            f"Name for the stage on {worker.config.address} ({worker.name} in stages.toml).\n"
+            "For example X, Y, Z, or Odor port. Leave it empty to use the stages.toml name.",
+            text=worker.label,
+        )
+        if not ok:
+            return
+        try:
+            label = self.labels.set_label(worker.name, text)
+        except LabelError as error:
+            QMessageBox.warning(self, "Rename stage", str(error))
+            return
+        old, worker.label = worker.label, label
+        card.set_label(label)
+        self.presets.refresh()
+        log.info("stage %s renamed from %r to %r", worker.name, old, label)
+        self.statusBar().showMessage(f"{worker.config.address} is now called {label}.", 8000)
+
+    def move_stage(self, card: StageCard, offset: int) -> None:
+        try:
+            order = self.labels.move(card.worker.name, offset)
+        except LabelError as error:
+            QMessageBox.warning(self, "Move stage", str(error))
+            return
+        self._arrange(order)
 
     def connect_all(self) -> None:
         for worker in self.workers:
@@ -219,9 +271,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.demo:
         presets_path = Path(tempfile.gettempdir()) / "stagehand-demo-presets.json"
+        labels_path = Path(tempfile.gettempdir()) / "stagehand-demo-labels.json"
         setup_logging(None)
     else:
         presets_path = app_config.presets_path
+        labels_path = app_config.labels_path
         setup_logging(app_config.source.parent if app_config.source else None)
     log.info("start%s with %s", " (demo)" if args.demo else "", ", ".join(app_config.stage_names))
 
@@ -230,7 +284,8 @@ def main(argv: list[str] | None = None) -> int:
     for worker in workers:
         worker.start()
     store = PresetStore(presets_path)
-    window = MainWindow(app_config, workers, store, demo=args.demo)
+    labels = LabelStore(labels_path, app_config.stage_names)
+    window = MainWindow(app_config, workers, store, labels=labels, demo=args.demo)
     window.show()
     if app_config.connect_on_start:
         window.connect_all()

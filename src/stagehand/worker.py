@@ -67,6 +67,8 @@ class StageWorker:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.config = config
+        # What messages call the stage. The window sets it; one assignment, so no lock.
+        self.label = config.name
         self._make_driver = make_driver
         self._poll_s = poll_s
         self._clock = clock
@@ -87,7 +89,13 @@ class StageWorker:
 
     @property
     def name(self) -> str:
+        """The fixed key from stages.toml. Presets and settings use it."""
         return self.config.name
+
+    @property
+    def _who(self) -> str:
+        """For the log: the label, and the key when they differ."""
+        return self.label if self.label == self.name else f"{self.label} [{self.name}]"
 
     def start(self) -> None:
         self._thread.start()
@@ -135,7 +143,7 @@ class StageWorker:
             try:
                 self.tick(self._poll_s)
             except Exception as error:  # keep the thread alive, so Stop still works
-                log.exception("%s: unexpected error in the worker", self.name)
+                log.exception("%s: unexpected error in the worker", self._who)
                 self._set(error=f"Unexpected error: {error}")
                 time.sleep(self._poll_s)
 
@@ -161,10 +169,10 @@ class StageWorker:
         try:
             getattr(self, f"_do_{name}")(*args)
         except DeviceError as error:
-            log.warning("%s: %s", self.name, error)
+            log.warning("%s: %s", self._who, error)
             self._set(error=str(error))
         except Exception as error:
-            log.exception("%s: unexpected error in %s", self.name, name)
+            log.exception("%s: unexpected error in %s", self._who, name)
             self._set(error=f"Unexpected error: {error}")
 
     def _do_connect(self) -> None:
@@ -178,10 +186,10 @@ class StageWorker:
             info = driver.open()
         except DeviceError as error:
             self._set(state=State.OFFLINE, error=str(error))
-            log.warning("%s: %s", self.name, error)
+            log.warning("%s: %s", self._who, error)
             return
         except Exception as error:
-            log.exception("%s: cannot connect", self.name)
+            log.exception("%s: cannot connect", self._who)
             self._set(state=State.OFFLINE, error=f"Cannot connect: {error}")
             return
         allowed = allowed_range(self.config, info)
@@ -189,7 +197,7 @@ class StageWorker:
         self._set(info=info, allowed=allowed, target=None)
         log.info(
             "%s connected: %s at %s, travel %g to %g %s",
-            self.name,
+            self._who,
             info.model,
             info.address,
             info.lower,
@@ -212,37 +220,37 @@ class StageWorker:
             with contextlib.suppress(Exception):  # harmless when idle; the cache may be stale
                 driver.stop()
             if busy:
-                log.info("%s: stopped before disconnect", self.name)
+                log.info("%s: stopped before disconnect", self._who)
         finally:
             driver.close()
             self._latch = None
             self._set(state=State.OFFLINE, position=None, target=None, detail="")
-            log.info("%s disconnected", self.name)
+            log.info("%s disconnected", self._who)
 
     def _do_move_to(self, target: float) -> None:
         driver = self._ready_driver()
         target = round(target, self.config.decimals)
         allowed = self._status.allowed
         if allowed is None:
-            raise DeviceError(f"{self.name}: no allowed range. Check min and max in stages.toml.")
+            raise DeviceError(f"{self.label}: no allowed range. Check min and max in stages.toml.")
         low, high = allowed
         if not low - TOLERANCE <= target <= high + TOLERANCE:
             units = self.config.units
             raise DeviceError(
-                f"{self.name}: {self._fmt(target)} {units} is outside the allowed range "
+                f"{self.label}: {self._fmt(target)} {units} is outside the allowed range "
                 f"{self._fmt(low)} to {self._fmt(high)} {units}."
             )
         target = min(max(target, low), high)
         driver.move_to(target)
         self._hold(State.MOVING, target)
-        log.info("%s: move to %s", self.name, self._fmt(target))
+        log.info("%s: move to %s", self._who, self._fmt(target))
 
     def _do_move_by(self, delta: float) -> None:
         self._ready_driver()
         status = self._status
         base = status.position
         if base is None:
-            raise DeviceError(f"{self.name}: the position is not known yet.")
+            raise DeviceError(f"{self.label}: the position is not known yet.")
         if status.target is not None and abs(base - status.target) <= SETTLED:
             base = status.target  # repeated jogs add up exactly
         self._do_move_to(base + delta)
@@ -252,7 +260,7 @@ class StageWorker:
         self._refuse_if_busy()
         driver.home()
         self._hold(State.HOMING, None)
-        log.info("%s: home search", self.name)
+        log.info("%s: home search", self._who)
 
     def _do_stop(self) -> None:
         if self._driver is None:
@@ -260,7 +268,7 @@ class StageWorker:
         self._latch = None
         self._driver.stop()
         self._set(target=None)
-        log.info("%s: stop", self.name)
+        log.info("%s: stop", self._who)
 
     def _do_reset(self) -> None:
         driver = self._connected_driver()
@@ -268,7 +276,7 @@ class StageWorker:
         driver.reset()
         self._latch = None
         self._set(target=None)
-        log.info("%s: reset", self.name)
+        log.info("%s: reset", self._who)
 
     def _poll(self) -> None:
         assert self._driver is not None
@@ -291,7 +299,7 @@ class StageWorker:
         self._set(**changes)
 
     def _lost_contact(self, error: DeviceError) -> None:
-        log.error("%s: lost contact: %s", self.name, error)
+        log.error("%s: lost contact: %s", self._who, error)
         driver, self._driver, self._latch = self._driver, None, None
         assert driver is not None
         # Try to stop: a write can still get through when replies do not.
@@ -325,22 +333,22 @@ class StageWorker:
 
     def _connected_driver(self) -> StageDriver:
         if self._driver is None:
-            raise DeviceError(f"{self.name} is not connected.")
+            raise DeviceError(f"{self.label} is not connected.")
         return self._driver
 
     def _refuse_if_busy(self, advice: str = "Wait or press Stop.") -> None:
         state = self._status.state
         if state.busy:
-            raise DeviceError(f"{self.name} is {state.value.lower()}. {advice}")
+            raise DeviceError(f"{self.label} is {state.value.lower()}. {advice}")
 
     def _ready_driver(self) -> StageDriver:
         driver = self._connected_driver()
         state = self._status.state
         if state is State.NOT_HOMED:
-            raise DeviceError(f"{self.name} is not homed. Home it first.")
+            raise DeviceError(f"{self.label} is not homed. Home it first.")
         self._refuse_if_busy()
         if state is not State.READY:
-            raise DeviceError(f"{self.name} is {state.value.lower()}. Reset it first.")
+            raise DeviceError(f"{self.label} is {state.value.lower()}. Reset it first.")
         return driver
 
     def _set(self, **changes: Any) -> None:

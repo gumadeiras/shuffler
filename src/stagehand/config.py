@@ -41,6 +41,7 @@ class StageConfig:
 class AppConfig:
     stages: tuple[StageConfig, ...]
     presets_path: Path
+    labels_path: Path
     kinesis_dir: Path = DEFAULT_KINESIS_DIR
     connect_on_start: bool = True
     confirm_moves: bool = True
@@ -51,7 +52,7 @@ class AppConfig:
         object.__setattr__(self, "stage_names", tuple(s.name for s in self.stages))
 
 
-APP_KEYS = {"presets", "kinesis_dir", "connect_on_start", "confirm_moves"}
+APP_KEYS = {"presets", "labels", "kinesis_dir", "connect_on_start", "confirm_moves"}
 STAGE_KEYS = {
     "name",
     "driver",
@@ -103,10 +104,12 @@ def parse(data: dict[str, Any], *, base: Path, source: Path | None = None) -> Ap
         raise ConfigError(f"Two stages use the same port or serial: {', '.join(clashes)}.")
 
     presets = Path(_string(app, "presets", "[app]", default="presets.json"))
+    labels = Path(_string(app, "labels", "[app]", default="labels.json"))
     kinesis_dir = Path(_string(app, "kinesis_dir", "[app]", default=str(DEFAULT_KINESIS_DIR)))
     return AppConfig(
         stages=stages,
         presets_path=presets if presets.is_absolute() else base / presets,
+        labels_path=labels if labels.is_absolute() else base / labels,
         kinesis_dir=kinesis_dir,
         connect_on_start=_bool(app, "connect_on_start", "[app]", default=True),
         confirm_moves=_bool(app, "confirm_moves", "[app]", default=True),

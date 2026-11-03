@@ -8,5 +8,6 @@ dist/
 stages.toml
 # Saved positions belong to this rig, not to the repository.
 presets.json
-presets.json.tmp
+labels.json
+*.json.tmp
 stagehand.log*

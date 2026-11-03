@@ -1,13 +1,20 @@
 """One card per stage: live position, travel bar, and the controls for that stage."""
 
-from PySide6.QtCore import QPointF, QRectF, QSettings, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QLocale, QPointF, QRectF, QSettings, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QDoubleValidator,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -21,6 +28,59 @@ from stagehand.gui import theme
 from stagehand.gui.icons import icon
 from stagehand.stage import State
 from stagehand.worker import StageStatus, StageWorker
+
+
+class TargetField(QLineEdit):
+    """A typed target. No spin arrows: a stray click must not change a target.
+
+    The validator accepts numbers only. The allowed range is shown in the tooltip but
+    not enforced here, so a target outside it reaches the worker, which refuses it
+    with a clear message instead of silently changing it.
+    """
+
+    def __init__(self, decimals: int, unit: str) -> None:
+        super().__init__()
+        self._decimals = decimals
+        self._unit = unit
+        self._range = (-1e9, 1e9)
+        validator = QDoubleValidator(-1e9, 1e9, decimals, self)
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        validator.setLocale(QLocale.c())  # a period as the decimal point on every PC
+        self.setValidator(validator)
+        self.setPlaceholderText("Target")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setToolTip("Type a target and press Enter or Go.")
+
+    def setRange(self, low: float, high: float) -> None:
+        self._range = (low, high)
+        self.setToolTip(
+            f"Type a target from {low:g} to {high:g} {self._unit} and press Enter or Go."
+        )
+
+    def minimum(self) -> float:
+        return self._range[0]
+
+    def maximum(self) -> float:
+        return self._range[1]
+
+    def setValue(self, value: float) -> None:
+        self.setText(f"{value:.{self._decimals}f}")
+
+    def value(self) -> float | None:
+        try:
+            return float(self.text())
+        except ValueError:
+            return None
+
+
+class TitleLabel(QLabel):
+    """The stage label. Double-click it to rename the stage."""
+
+    double_clicked = Signal()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        self.double_clicked.emit()
+        event.accept()
 
 
 class TravelBar(QWidget):
@@ -87,6 +147,9 @@ class TravelBar(QWidget):
 
 
 class StageCard(QFrame):
+    rename_requested = Signal()
+    move_requested = Signal(int)  # -1 left, +1 right
+
     def __init__(self, worker: StageWorker, *, confirm_moves: bool, settings: QSettings) -> None:
         super().__init__()
         self.worker = worker
@@ -99,8 +162,11 @@ class StageCard(QFrame):
         self.setFixedWidth(theme.CARD_WIDTH)
 
         unit = self.config.units
-        self.name_label = QLabel(self.config.name)
+        self.name_label = TitleLabel(worker.label)
         self.name_label.setFont(theme.font(theme.TITLE_PX, bold=True))
+        self.name_label.setToolTip("Double-click to rename this stage.")
+        self.name_label.setCursor(Qt.PointingHandCursor)
+        self.name_label.double_clicked.connect(self.rename_requested)
         self.pill = QLabel()
         self.model_label = QLabel(self.config.address)
         self.model_label.setObjectName("secondary")
@@ -122,15 +188,8 @@ class StageCard(QFrame):
             label.setObjectName("secondary")
             label.setFont(theme.font(theme.SMALL_PX))
 
-        self.target_box = QDoubleSpinBox()
-        self.target_box.setDecimals(self.config.decimals)
-        self.target_box.setSuffix(f" {unit}")
-        self.target_box.setKeyboardTracking(False)
-        self.target_box.setButtonSymbols(QDoubleSpinBox.NoButtons)  # type it; no accidental clicks
-        self.target_box.setRange(-1e6, 1e6)
-        self.target_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.target_box.lineEdit().returnPressed.connect(self._go)
-        self.target_box.setToolTip("Type a target and press Enter or Go.")
+        self.target_box = TargetField(self.config.decimals, unit)
+        self.target_box.returnPressed.connect(self._go)
         self.go_button = QPushButton(icon("go", theme.PANEL), "Go")
         self.go_button.setObjectName("primary")
         self.go_button.clicked.connect(self._go)
@@ -166,6 +225,18 @@ class StageCard(QFrame):
         self.more_button.setPopupMode(QToolButton.InstantPopup)
         self.more_button.setToolTip("More")
         menu = QMenu(self.more_button)
+        self.rename_action = menu.addAction(
+            icon("label"),
+            "Rename…",
+            lambda: self.rename_requested.emit(),  # noqa: PLW0108 - a signal is not a slot here
+        )
+        self.left_action = menu.addAction(
+            icon("move-left"), "Move left", lambda: self.move_requested.emit(-1)
+        )
+        self.right_action = menu.addAction(
+            icon("move-right"), "Move right", lambda: self.move_requested.emit(+1)
+        )
+        menu.addSeparator()
         self.reset_action = menu.addAction(icon("reset"), "Reset controller…", self._reset)
         menu.addSeparator()
         self.connect_action = menu.addAction(icon("connect"), "Connect", worker.connect)
@@ -205,6 +276,9 @@ class StageCard(QFrame):
         layout.addWidget(rule)
         go_row = QHBoxLayout()
         go_row.addWidget(self.target_box, 1)
+        target_unit = QLabel(unit)
+        target_unit.setObjectName("secondary")
+        go_row.addWidget(target_unit)
         go_row.addWidget(self.go_button)
         layout.addLayout(go_row)
         jog_row = QHBoxLayout()
@@ -227,6 +301,22 @@ class StageCard(QFrame):
 
     # -- updates ----------------------------------------------------------------------------
 
+    def set_label(self, label: str) -> None:
+        self.name_label.setText(label)
+        self._show_identity()
+
+    def set_position_in_row(self, index: int, count: int) -> None:
+        self.left_action.setEnabled(index > 0)
+        self.right_action.setEnabled(index < count - 1)
+
+    def _show_identity(self) -> None:
+        """Model and address; the stages.toml name too when the label hides it."""
+        address = self.config.address
+        if self.worker.label != self.config.name:
+            address = f"{address} · {self.config.name}"
+        info = self._status.info if self._status else None
+        self.model_label.setText(f"{info.model}\n{address}" if info else address)
+
     def show_status(self, status: StageStatus) -> None:
         if status == self._status:
             return
@@ -235,10 +325,7 @@ class StageCard(QFrame):
         decimals = self.config.decimals
         self.pill.setText(("! " if state is State.ERROR else "") + state.value)
         self.pill.setStyleSheet(theme.pill_style(state))
-        if status.info is not None:
-            self.model_label.setText(f"{status.info.model}\n{status.info.address}")
-        else:
-            self.model_label.setText(self.config.address)
+        self._show_identity()
 
         if status.position is None:
             self.position_label.setText("—")
@@ -291,8 +378,12 @@ class StageCard(QFrame):
 
     def _go(self) -> None:
         if self.go_button.isEnabled():
-            self.target_box.interpretText()
-            self.worker.move_to(self.target_box.value())
+            target = self.target_box.value()
+            if target is None:
+                self.error_label.setText("Type a target position first.")
+                self.error_label.show()
+                return
+            self.worker.move_to(target)  # the worker refuses a target outside the range
 
     def _jog(self, sign: int) -> None:
         self.worker.move_by(sign * float(self.step_box.currentData()))
@@ -309,7 +400,7 @@ class StageCard(QFrame):
             answer = QMessageBox.question(
                 self,
                 "Home stage",
-                f"Home {self.config.name}?\n\nThe stage moves to its home position at one end "
+                f"Home {self.worker.label}?\n\nThe stage moves to its home position at one end "
                 f"of its travel. Make sure nothing is in its path.{extra}",
                 QMessageBox.Yes | QMessageBox.Cancel,
                 QMessageBox.Cancel,
@@ -326,7 +417,7 @@ class StageCard(QFrame):
         answer = QMessageBox.question(
             self,
             "Reset controller",
-            f"Reset the {self.config.name} controller?\n\n{effect}",
+            f"Reset the {self.worker.label} controller?\n\n{effect}",
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )

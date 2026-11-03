@@ -64,8 +64,15 @@ def blocked_reason(status: StageStatus, target: float) -> str:
 class SavePresetDialog(QDialog):
     """Name the preset and pick the stages it stores. Stages that cannot be saved are shown."""
 
-    def __init__(self, statuses: Sequence[StageStatus], decimals: dict[str, int], parent: QWidget):
+    def __init__(
+        self,
+        statuses: Sequence[StageStatus],
+        decimals: dict[str, int],
+        parent: QWidget,
+        labels: dict[str, str] | None = None,
+    ):
         super().__init__(parent)
+        labels = labels or {}
         self.setWindowTitle("Save preset")
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("For example: Odor port in")
@@ -75,7 +82,7 @@ class SavePresetDialog(QDialog):
         grid = QGridLayout()
         grid.setHorizontalSpacing(theme.SECTION_GAP)
         for row, status in enumerate(statuses):
-            check = QCheckBox(status.name)
+            check = QCheckBox(labels.get(status.name, status.name))
             usable = (
                 status.position is not None
                 and status.state.connected
@@ -136,8 +143,10 @@ class GoToPresetDialog(QDialog):
         statuses: dict[str, StageStatus],
         decimals: dict[str, int],
         parent: QWidget,
+        labels: dict[str, str] | None = None,
     ):
         super().__init__(parent)
+        labels = labels or {}
         self.setWindowTitle("Go to preset")
         self.checks: dict[str, QCheckBox] = {}
         self._targets: dict[str, float] = {}
@@ -151,7 +160,7 @@ class GoToPresetDialog(QDialog):
             label.setObjectName("secondary")
             grid.addWidget(label, 0, column)
         for row, (name, target) in enumerate(preset.positions.items(), start=1):
-            check = QCheckBox(name)
+            check = QCheckBox(labels.get(name, name))
             status = statuses.get(name)
             places = decimals.get(name, 4)
             reason = "not in this rig" if status is None else blocked_reason(status, target)
@@ -218,6 +227,7 @@ class PresetsPanel(QFrame):
         self.setObjectName("card")
         self.store = store
         self.workers = {w.name: w for w in workers}
+        self.order = [w.name for w in workers]  # column order: follows the cards
         self.decimals = {w.name: w.config.decimals for w in workers}
         self._confirm = confirm_moves
         self._statuses: dict[str, StageStatus] = {}
@@ -241,9 +251,8 @@ class PresetsPanel(QFrame):
         self.delete_button = QPushButton(icon("delete"), "Delete")
         self.delete_button.clicked.connect(self.delete_selected)
 
-        names = list(self.workers)
+        names = self.order
         self.table = QTableWidget(0, len(names) + 2)
-        self.table.setHorizontalHeaderLabels(["Preset", *names, "Saved"])
         self.table.verticalHeader().hide()
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -293,9 +302,19 @@ class PresetsPanel(QFrame):
 
     # -- display ----------------------------------------------------------------------------
 
+    def labels(self) -> dict[str, str]:
+        return {name: worker.label for name, worker in self.workers.items()}
+
+    def set_order(self, order: Sequence[str]) -> None:
+        """Show the stage columns in the order of the cards."""
+        self.order = list(order)
+        self.refresh()
+
     def refresh(self, select: str | None = None) -> None:
         select = select or self.selected_name()
-        names = list(self.workers)
+        names = self.order
+        labels = self.labels()
+        self.table.setHorizontalHeaderLabels(["Preset", *(labels[n] for n in names), "Saved"])
         self.table.setRowCount(len(self.store.presets))
         for row, preset in enumerate(self.store.presets):
             item = QTableWidgetItem(preset.name)
@@ -357,8 +376,8 @@ class PresetsPanel(QFrame):
     # -- actions ----------------------------------------------------------------------------
 
     def save_current(self) -> None:
-        statuses = [self.workers[name].status for name in self.workers]
-        dialog = SavePresetDialog(statuses, self.decimals, self)
+        statuses = [self.workers[name].status for name in self.order]
+        dialog = SavePresetDialog(statuses, self.decimals, self, self.labels())
         selected = self.selected_name()
         if selected:
             dialog.name_edit.setText(selected)
@@ -390,7 +409,8 @@ class PresetsPanel(QFrame):
         if preset is None:
             return
         statuses = {n: w.status for n, w in self.workers.items()}
-        dialog = GoToPresetDialog(preset, statuses, self.decimals, self)
+        labels = self.labels()
+        dialog = GoToPresetDialog(preset, statuses, self.decimals, self, labels)
         if self._confirm and dialog.exec() != QDialog.Accepted:
             return
         targets = dialog.targets()
@@ -399,7 +419,7 @@ class PresetsPanel(QFrame):
             return
         for stage, target in targets.items():
             self.workers[stage].move_to(target)
-        skipped = sorted(set(preset.positions) - set(targets))
+        skipped = sorted(labels.get(s, s) for s in set(preset.positions) - set(targets))
         note = f" Not moved: {', '.join(skipped)}." if skipped else ""
         self.message.emit(f"Going to preset “{preset.name}”.{note}")
 

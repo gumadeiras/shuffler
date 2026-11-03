@@ -1,6 +1,7 @@
 """Named stage positions, kept in one JSON file next to stages.toml.
 
-A preset maps stage names to positions. It can hold a subset of the stages. The file
+A preset maps stage keys (the ``name`` in stages.toml, which never changes when a
+stage is relabeled in the window) to positions. It can hold a subset of the stages. The file
 is rewritten atomically after each change. If it cannot be read, the store refuses
 to write, so a damaged file is never replaced by an empty one.
 """
@@ -10,6 +11,8 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from stagehand.jsonfile import write_atomic
 
 VERSION = 1
 
@@ -121,11 +124,8 @@ class PresetStore:
                 {"name": p.name, "positions": p.positions, "saved": p.saved} for p in presets
             ],
         }
-        temporary = self.path.with_name(self.path.name + ".tmp")
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-            temporary.replace(self.path)  # atomic on the same volume
+            write_atomic(self.path, data)
         except OSError as error:
             raise PresetError(f"Cannot save presets to {self.path}: {error}") from None
         self.presets = presets

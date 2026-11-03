@@ -4,6 +4,8 @@
 [app]
 # Saved positions, relative to this file.
 presets = "presets.json"
+# Stage labels and card order, set in the window (double-click a stage title).
+labels = "labels.json"
 # Where Thorlabs Kinesis is installed (64-bit).
 kinesis_dir = "C:/Program Files/Thorlabs/Kinesis"
 # Connect to every stage when the window opens.
@@ -11,10 +13,12 @@ connect_on_start = true
 # Ask before a home search and before going to a preset.
 confirm_moves = true
 
-# One [[stage]] table per axis. The window shows them in this order.
+# One [[stage]] table per controller.
 #
-#   name       label in the window and in presets (renaming a stage orphans its
-#              positions in existing presets)
+#   name       fixed key for this controller. Presets store positions under it, so
+#              do not change it after you save presets. To give the stage an axis
+#              name ("X", "Odor Z"), rename it in the window instead: double-click
+#              its title. Use ... > Move left / Move right to order the cards.
 #   driver     "conex" (Newport CONEX-CC) or "kinesis" (Thorlabs K-Cube)
 #   port       conex: the COM port
 #   serial     kinesis: the 8-digit serial number (28xxxxxx = KBD101, 27xxxxxx = KDC101)

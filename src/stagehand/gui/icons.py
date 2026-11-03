@@ -29,6 +29,9 @@ FILES = {
     "more": "dots",
     "move-up": "arrow-up",
     "move-down": "arrow-down",
+    "move-left": "arrow-left",
+    "move-right": "arrow-right",
+    "label": "tag",
     "warning": "alert-triangle",
     "here": "map-pin",
 }
