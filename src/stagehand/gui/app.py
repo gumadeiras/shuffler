@@ -44,6 +44,7 @@ from stagehand.worker import StageWorker
 
 log = logging.getLogger("stagehand")
 REFRESH_MS = 100
+GEOMETRY_KEY = "window/geometry-v2"
 
 DEMO_CONFIG = {
     "app": {"connect_on_start": True},
@@ -166,10 +167,12 @@ class MainWindow(QMainWindow):
         self.status_label.setText(self._resting_message)
         if self.axes.load_error:
             self.say(self.axes.load_error, 60000)
-        geometry = self.settings.value("window/geometry")
+        # The first time, open compact: the smallest size that shows everything (the
+        # presets table shows three rows). After that, the size the user left it at.
+        # The key has a version: sizes saved by older versions opened far too tall.
+        geometry = self.settings.value(GEOMETRY_KEY)
         if geometry is None or not self.restoreGeometry(geometry):
-            hint = self.sizeHint()
-            self.resize(hint.width(), hint.height() + 160)  # room for a few preset rows
+            self.resize(self.minimumSizeHint())
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
@@ -310,7 +313,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self.timer.stop()
-        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue(GEOMETRY_KEY, self.saveGeometry())
         for worker in self.workers:
             worker.shutdown()  # stops a moving stage, then disconnects
         event.accept()
