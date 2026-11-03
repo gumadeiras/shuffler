@@ -4,26 +4,22 @@ The card shows positions as the axis presents them (``Axis.to_display``): for a
 reversed stage, counted from the other end of the travel, so + and larger numbers
 always mean forward, up, right, or in. It converts back (``Axis.to_device``) before
 it sends a target to the worker.
+
+Sizes: the window gives every card the same fixed width (``set_card_width``), at
+least ``theme.CARD_WIDTH`` and wider when a card's controls need it. Wrapped text
+(``WrapLabel``) wraps at the inner width and reports its real height, so the card's
+height is always right and the window layout keeps it clear of the presets panel.
 """
 
 from html import escape
 
-from PySide6.QtCore import QLocale, QPointF, QRectF, QSettings, Qt, Signal
-from PySide6.QtGui import (
-    QColor,
-    QDoubleValidator,
-    QFontMetrics,
-    QMouseEvent,
-    QPainter,
-    QPainterPath,
-    QPen,
-)
+from PySide6.QtCore import QPointF, QRectF, QSettings, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -36,13 +32,21 @@ from PySide6.QtWidgets import (
 from stagehand.axes import Axis
 from stagehand.gui import theme
 from stagehand.gui.icons import icon
+from stagehand.gui.widgets import NumberField, TitleLabel, WrapLabel
 from stagehand.stage import State
 from stagehand.worker import StageStatus, StageWorker
+
+BORDER = 1  # the card frame
+
+
+def pill_text(state: State) -> str:
+    return ("! " if state is State.ERROR else "") + state.value
+
 
 _pill_width: int | None = None
 
 
-def _widest_pill() -> int:
+def widest_pill() -> int:
     """The width of the widest state pill, measured once on a label that is never shown."""
     global _pill_width  # noqa: PLW0603 - a cache for the process
     if _pill_width is None:
@@ -50,66 +54,12 @@ def _widest_pill() -> int:
         widths = []
         for state in State:
             probe.setStyleSheet(theme.pill_style(state))
-            probe.setText(("! " if state is State.ERROR else "") + state.value)
+            probe.setText(pill_text(state))
             probe.ensurePolished()
             widths.append(probe.sizeHint().width())
         probe.deleteLater()
         _pill_width = max(widths)
     return _pill_width
-
-
-class TargetField(QLineEdit):
-    """A typed target. No spin arrows: a stray click must not change a target.
-
-    The validator accepts numbers only. The allowed range is in the tooltip but not
-    enforced here: a target outside it reaches the worker, which refuses it with a
-    clear message instead of silently changing it.
-    """
-
-    def __init__(self, decimals: int, unit: str) -> None:
-        super().__init__()
-        self._decimals = decimals
-        self._unit = unit
-        self._range = (-1e9, 1e9)
-        validator = QDoubleValidator(-1e9, 1e9, decimals, self)
-        validator.setNotation(QDoubleValidator.StandardNotation)
-        validator.setLocale(QLocale.c())  # a period as the decimal point on every PC
-        self.setValidator(validator)
-        self.setFont(theme.number_font(theme.BODY_PX + 1))
-        self.setPlaceholderText("Target")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setToolTip("Type a target and press Enter or Go.")
-
-    def setRange(self, low: float, high: float) -> None:
-        self._range = (low, high)
-        self.setToolTip(
-            f"Type a target from {low:g} to {high:g} {self._unit} and press Enter or Go."
-        )
-
-    def minimum(self) -> float:
-        return self._range[0]
-
-    def maximum(self) -> float:
-        return self._range[1]
-
-    def setValue(self, value: float) -> None:
-        self.setText(f"{value:.{self._decimals}f}")
-
-    def value(self) -> float | None:
-        try:
-            return float(self.text())
-        except ValueError:
-            return None
-
-
-class TitleLabel(QLabel):
-    """The stage name. Double-click it to change the name and direction."""
-
-    double_clicked = Signal()
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        self.double_clicked.emit()
-        event.accept()
 
 
 class TravelBar(QWidget):
@@ -142,10 +92,9 @@ class TravelBar(QWidget):
         left_edge, width = 1.0, self.width() - 2.0
         top = self.height() - self.BAR - 4  # room above for the target mark
         radius = self.BAR / 2
-        track = QRectF(left_edge, top, width, self.BAR)
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(theme.TRACK))
-        painter.drawRoundedRect(track, radius, radius)
+        painter.drawRoundedRect(QRectF(left_edge, top, width, self.BAR), radius, radius)
         if self.travel is None:
             painter.end()
             return
@@ -186,37 +135,33 @@ class StageCard(QFrame):
         self.config = worker.config
         self.axis = Axis(label=worker.label)
         self._confirm = confirm_moves
-        self._settings = settings
         self._status: StageStatus | None = None
         self._was_ready = False
         self.setObjectName("card")
-        # The window gives every card the same fixed width: at least CARD_WIDTH, and
-        # wider when the controls of any card need it (see needed_width()).
-        self.setFixedWidth(theme.CARD_WIDTH)
-
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
         unit = self.config.units
+
+        # Header: name and state.
         self.name_label = TitleLabel(worker.label)
         self.name_label.setFont(theme.font(theme.TITLE_PX, bold=True))
         self.name_label.setToolTip("Double-click to change the name and direction.")
         self.name_label.setCursor(Qt.PointingHandCursor)
-        self.name_label.setWordWrap(True)  # a long name wraps instead of being cut
         self.name_label.double_clicked.connect(self.settings_requested)
         self.pill = QLabel()
         self.pill.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.model_label = QLabel(self.config.address)
+        self.model_label = WrapLabel(self.config.address)
         self.model_label.setObjectName("secondary")
-        self.model_label.setWordWrap(True)
 
+        # Readout.
         self.position_label = QLabel("—")
         self.position_label.setFont(theme.number_font())
         self.position_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.unit_label = QLabel(unit)
         self.unit_label.setObjectName("secondary")
         self.unit_label.setFont(theme.font(theme.TITLE_PX))
-        self.detail_label = QLabel(" ")
+        self.detail_label = WrapLabel()
         self.detail_label.setObjectName("secondary")
         self.detail_label.setFont(theme.font(theme.SMALL_PX))
-        self.detail_label.setWordWrap(True)
         self.bar = TravelBar()
         self.low_label = QLabel(" ")
         self.high_label = QLabel(" ")
@@ -226,8 +171,8 @@ class StageCard(QFrame):
             label.setFont(theme.font(theme.SMALL_PX))
             label.setTextFormat(Qt.RichText)
 
-        self.target_box = TargetField(self.config.decimals, unit)
-        self.target_box.setMinimumWidth(self._number_width(self.config.decimals))
+        # Go to a target.
+        self.target_box = NumberField(self.config.decimals, unit, "Target")
         self.target_box.returnPressed.connect(self._go)
         target_unit = QLabel(unit)
         target_unit.setObjectName("secondary")
@@ -235,26 +180,14 @@ class StageCard(QFrame):
         self.go_button.setObjectName("primary")
         self.go_button.clicked.connect(self._go)
 
-        self.speed_box = TargetField(3, f"{unit}/s")
-        self.speed_box.setMinimumWidth(self._number_width(3))
-        self.speed_box.setPlaceholderText("Speed")
-        self.speed_box.returnPressed.connect(self._set_speed)
-        self.speed_box.textEdited.connect(self._update_speed_button)
-        speed_label = QLabel("Speed")
-        speed_label.setObjectName("secondary")
-        self.speed_unit = QLabel(f"{unit}/s")
-        self.speed_unit.setObjectName("secondary")
-        self.speed_button = QPushButton("Set")
-        self.speed_button.setToolTip("Use this speed for the next moves.")
-        self.speed_button.clicked.connect(self._set_speed)
-
+        # Jog.
         self.back_button = QPushButton(icon("jog-back"), "")
         self.forward_button = QPushButton(icon("jog-forward"), "")
+        self.forward_button.setLayoutDirection(Qt.RightToLeft)  # the icon after the word
         self.back_button.clicked.connect(lambda: self._jog(-1))
         self.forward_button.clicked.connect(lambda: self._jog(+1))
-        self.forward_button.setLayoutDirection(Qt.RightToLeft)  # icon after the word
         self.step_box = QComboBox()
-        self.step_box.setSizeAdjustPolicy(QComboBox.AdjustToContents)  # never cut a step
+        self.step_box.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         for step in self.config.jog_steps:
             self.step_box.addItem(f"{step:g} {unit}", step)
         self.step_box.setToolTip("Step size for − and +")
@@ -265,6 +198,19 @@ class StageCard(QFrame):
             lambda: settings.setValue(self._key("step"), self.step_box.currentData())
         )
 
+        # Speed.
+        speed_label = QLabel("Speed")
+        speed_label.setObjectName("secondary")
+        self.speed_box = NumberField(3, f"{unit}/s", "Speed")
+        self.speed_box.returnPressed.connect(self._set_speed)
+        self.speed_box.textEdited.connect(self._update_speed_button)
+        speed_unit = QLabel(f"{unit}/s")
+        speed_unit.setObjectName("secondary")
+        self.speed_button = QPushButton("Set")
+        self.speed_button.setToolTip("Use this speed for the next moves.")
+        self.speed_button.clicked.connect(self._set_speed)
+
+        # Actions.
         self.home_button = QPushButton(icon("home"), "Home")
         self.home_button.setToolTip("Find the home position (reference the stage).")
         self.home_button.clicked.connect(self._home)
@@ -278,7 +224,48 @@ class StageCard(QFrame):
         self.more_button.setIcon(icon("more"))
         self.more_button.setPopupMode(QToolButton.InstantPopup)
         self.more_button.setToolTip("More")
-        menu = QMenu(self.more_button)
+        self.more_button.setMenu(self._menu(worker))
+
+        self.error_label = WrapLabel(collapse=True)
+        self.error_label.setObjectName("error")
+        self.error_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.MARGIN)
+        layout.setSpacing(theme.GAP)
+        layout.addLayout(_row(self.name_label, (self.pill, 0, Qt.AlignTop), stretch_first=True))
+        layout.addWidget(self.model_label)
+        readout = QHBoxLayout()
+        readout.setSpacing(theme.UNIT)
+        readout.addWidget(self.position_label, 0, Qt.AlignBaseline)
+        readout.addWidget(self.unit_label, 0, Qt.AlignBaseline)
+        readout.addStretch(1)
+        layout.addLayout(readout)
+        layout.addWidget(self.detail_label)
+        layout.addWidget(self.bar)
+        limits = QHBoxLayout()
+        limits.addWidget(self.low_label, 0, Qt.AlignTop)
+        limits.addStretch(1)
+        limits.addWidget(self.high_label, 0, Qt.AlignTop)
+        layout.addLayout(limits)
+        rule = QFrame()
+        rule.setObjectName("rule")
+        layout.addWidget(rule)
+        layout.addLayout(_row((self.target_box, 1), target_unit, self.go_button))
+        layout.addLayout(_row(self.back_button, (self.step_box, 1), self.forward_button))
+        layout.addLayout(_row(speed_label, (self.speed_box, 1), speed_unit, self.speed_button))
+        actions = _row(self.connect_button, self.home_button, self.stop_button)
+        actions.addStretch(1)
+        actions.addWidget(self.more_button)
+        layout.addLayout(actions)
+        layout.addWidget(self.error_label)
+        layout.addStretch(1)
+
+        self.set_card_width(theme.CARD_WIDTH)
+        self.set_axis(self.axis)
+
+    def _menu(self, worker: StageWorker) -> QMenu:
+        menu = QMenu(self)
         self.settings_action = menu.addAction(
             icon("label"),
             "Name and direction…",
@@ -295,72 +282,36 @@ class StageCard(QFrame):
         menu.addSeparator()
         self.connect_action = menu.addAction(icon("connect"), "Connect", worker.connect)
         self.disconnect_action = menu.addAction(icon("disconnect"), "Disconnect", worker.disconnect)
-        self.more_button.setMenu(menu)
+        return menu
 
-        self.error_label = QLabel()
-        self.error_label.setObjectName("error")
-        self.error_label.setWordWrap(True)
-        self.error_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.error_label.hide()
+    # -- size -------------------------------------------------------------------------------
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.MARGIN)
-        layout.setSpacing(theme.GAP)
-        header = QHBoxLayout()
-        header.addWidget(self.name_label, 1)
-        header.addWidget(self.pill, 0, Qt.AlignVCenter)
-        layout.addLayout(header)
-        layout.addWidget(self.model_label)
-        layout.addSpacing(theme.UNIT // 2)
-        readout = QHBoxLayout()
-        readout.setSpacing(theme.UNIT)
-        readout.addWidget(self.position_label, 0, Qt.AlignBaseline)
-        readout.addWidget(self.unit_label, 0, Qt.AlignBaseline)
-        readout.addStretch(1)
-        layout.addLayout(readout)
-        layout.addWidget(self.detail_label)
-        layout.addWidget(self.bar)
-        limits = QHBoxLayout()
-        limits.setContentsMargins(0, 0, 0, 0)
-        limits.addWidget(self.low_label, 0, Qt.AlignTop)
-        limits.addStretch(1)
-        limits.addWidget(self.high_label, 0, Qt.AlignTop)
-        layout.addLayout(limits)
-        rule = QFrame()
-        rule.setObjectName("rule")
-        layout.addWidget(rule)
-        go_row = QHBoxLayout()
-        go_row.addWidget(self.target_box, 1)
-        go_row.addWidget(target_unit)
-        go_row.addWidget(self.go_button)
-        layout.addLayout(go_row)
-        jog_row = QHBoxLayout()
-        jog_row.addWidget(self.back_button)
-        jog_row.addWidget(self.step_box, 1)
-        jog_row.addWidget(self.forward_button)
-        layout.addLayout(jog_row)
-        speed_row = QHBoxLayout()
-        speed_row.addWidget(speed_label)
-        speed_row.addWidget(self.speed_box, 1)
-        speed_row.addWidget(self.speed_unit)
-        speed_row.addWidget(self.speed_button)
-        layout.addLayout(speed_row)
-        actions = QHBoxLayout()
-        actions.addWidget(self.connect_button)
-        actions.addWidget(self.home_button)
-        actions.addWidget(self.stop_button)
-        actions.addStretch(1)
-        actions.addWidget(self.more_button)
-        layout.addLayout(actions)
-        layout.addWidget(self.error_label)
-        layout.addStretch(1)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)  # width: the size hint
-        # Wrapped text takes the width that the controls give the card; it never widens
-        # the card. _set_wrapped() gives each one the height of its wrapped text.
-        for label in (self.name_label, self.model_label, self.detail_label, self.error_label):
-            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+    def needed_width(self) -> int:
+        """The card width that the controls need. Wrapped text never adds to it."""
+        controls = (
+            self.back_button,
+            self.forward_button,
+            self.step_box,
+            self.go_button,
+            self.speed_button,
+            self.home_button,
+            self.stop_button,
+            self.connect_button,
+            self.more_button,
+        )
+        for widget in controls:  # a row never squeezes a control below its text
+            widget.setMinimumWidth(widget.sizeHint().width())
+        layout = self.layout()
+        return max(theme.CARD_WIDTH, layout.minimumSize().width())
 
-        self.set_axis(self.axis)
+    def set_card_width(self, width: int) -> None:
+        if self.minimumWidth() == width == self.maximumWidth():
+            return
+        self.setFixedWidth(width)
+        inner = width - 2 * (theme.MARGIN + BORDER)
+        for label in (self.model_label, self.detail_label, self.error_label):
+            label.set_wrap_width(inner)
+        self.name_label.set_wrap_width(inner - widest_pill() - theme.GAP)
 
     # -- updates ----------------------------------------------------------------------------
 
@@ -368,13 +319,12 @@ class StageCard(QFrame):
         """Show a new name, direction, or sense."""
         changed_sense = axis.mirrored != self.axis.mirrored
         self.axis = axis
-        self._set_wrapped(self.name_label, axis.label, width=self._name_width())
+        self.name_label.setText(axis.label)
         negative, positive = axis.words
         self.back_button.setText(negative)
         self.forward_button.setText(positive)
         self.back_button.setToolTip(f"Move {negative or 'back'} by one step (−)")
         self.forward_button.setToolTip(f"Move {positive or 'forward'} by one step (+)")
-        self._hold_widths()
         status, self._status = self._status, None  # redraw everything
         self.show_status(status or self.worker.status)
         if changed_sense and self._status and self._status.position is not None:
@@ -391,16 +341,16 @@ class StageCard(QFrame):
         state = status.state
         axis = self.axis
         units = self.config.units
-        self.pill.setText(("! " if state is State.ERROR else "") + state.value)
+        info = status.info
+        self.pill.setText(pill_text(state))
         self.pill.setStyleSheet(theme.pill_style(state))
-        self._show_identity(status)
+        self.model_label.setText(self._identity(status))
 
         position = None if status.position is None else axis.to_display(status.position)
         self.position_label.setText("—" if position is None else self._fmt(position))
         self.unit_label.setVisible(position is not None)
-        self._set_wrapped(self.detail_label, self._detail(status))
+        self.detail_label.setText(self._detail(status))
 
-        info = status.info
         if info is not None:
             travel = axis.display_range(info.lower, info.upper)
             allowed = axis.display_range(*status.allowed) if status.allowed else None
@@ -415,9 +365,8 @@ class StageCard(QFrame):
             self.high_label.setText(" ")
             self.bar.travel = self.bar.allowed = None
         self.bar.position = position
-        self.bar.target = (
-            axis.to_display(status.target) if state.busy and status.target is not None else None
-        )
+        moving_to = status.target if state.busy else None
+        self.bar.target = None if moving_to is None else axis.to_display(moving_to)
         self.bar.live = state.busy
         self.bar.update()
 
@@ -428,48 +377,52 @@ class StageCard(QFrame):
             self.target_box.setValue(position)
         self._was_ready = ready
 
-        # The speed field shows the controller's speed unless the user is typing one.
+        self._show_speed(status)
+        self._enable(status)
+        self.error_label.setText(status.error)
+
+    def _show_speed(self, status: StageStatus) -> None:
+        """The controller's speed, unless the user is typing one."""
         if not self.speed_box.hasFocus():
             if status.velocity is None:
                 self.speed_box.clear()
             else:
                 self.speed_box.setValue(status.velocity)
-        limit = info.max_velocity if info else None
+        units = self.config.units
+        limit = status.info.max_velocity if status.info else None
         self.speed_box.setToolTip(
             f"Speed for moves and jogs, in {units}/s"
             + (f" (controller maximum {limit:g} {units}/s)" if limit else "")
             + ". Homing uses the controller's own homing speed."
         )
-        self.speed_box.setEnabled(
-            state.connected and not state.busy and status.velocity is not None
-        )
-        self._update_speed_button()
 
+    def _enable(self, status: StageStatus) -> None:
+        state = status.state
         connected = state.connected
         can_move = state is State.READY and status.allowed is not None
         for widget in (self.target_box, self.go_button, self.back_button, self.forward_button):
             widget.setEnabled(can_move)
         self.step_box.setEnabled(connected)
+        self.speed_box.setEnabled(connected and not state.busy and status.velocity is not None)
+        self._update_speed_button()
+        not_homed = state is State.NOT_HOMED
         self.home_button.setEnabled(connected and not state.busy)
-        self.home_button.setObjectName("primary" if state is State.NOT_HOMED else "")
-        self.home_button.setIcon(
-            icon("home", theme.PANEL if state is State.NOT_HOMED else theme.NAVY)
-        )
-        self._restyle(self.home_button)
+        self.home_button.setObjectName("primary" if not_homed else "")
+        self.home_button.setIcon(icon("home", theme.PANEL if not_homed else theme.NAVY))
+        _restyle(self.home_button)
         self.stop_button.setEnabled(connected)
         self.stop_button.setProperty("live", state.busy)
         self.stop_button.setIcon(icon("stop", theme.PANEL if state.busy else theme.NAVY))
-        self._restyle(self.stop_button)
-        self.connect_button.setVisible(state is State.OFFLINE)
-        self.home_button.setVisible(state is not State.OFFLINE)
-        self.stop_button.setVisible(state is not State.OFFLINE)
+        _restyle(self.stop_button)
+        offline = state is State.OFFLINE
+        self.connect_button.setVisible(offline)
+        self.home_button.setVisible(not offline)
+        self.stop_button.setVisible(not offline)
         self.reset_action.setEnabled(connected)
-        self.connect_action.setEnabled(state is State.OFFLINE)
+        self.connect_action.setEnabled(offline)
         self.disconnect_action.setEnabled(connected)
 
-        self._set_wrapped(self.error_label, status.error)
-
-    def _show_identity(self, status: StageStatus) -> None:
+    def _identity(self, status: StageStatus) -> str:
         """Model, address, the stages.toml name when the label hides it, and the sense."""
         parts = [self.config.address]
         if self.axis.label != self.config.name:
@@ -477,7 +430,7 @@ class StageCard(QFrame):
         if self.axis.mirrored:
             parts.append("reversed")
         line = "  ·  ".join(parts)
-        self._set_wrapped(self.model_label, f"{status.info.model}\n{line}" if status.info else line)
+        return f"{status.info.model}\n{line}" if status.info else line
 
     def _detail(self, status: StageStatus) -> str:
         """One short line that says what the stage is doing or needs."""
@@ -493,84 +446,18 @@ class StageCard(QFrame):
             return f"Moving to {target} {self.config.units}"
         if state is State.NOT_HOMED:
             return "Home this stage before you move it."
-        return status.detail or " "
+        return status.detail
 
     @staticmethod
     def _end(number: str, word: str, *, left: bool) -> str:
         """A travel bar end: the number, and under it the direction word in gold."""
         if not word:
             return escape(number)
-        arrow = "◂ " if left else ""
-        tail = "" if left else " ▸"
+        text = f"◂ {word}" if left else f"{word} ▸"
         return (
             f"{escape(number)}<br><span style='color:{theme.GOLD}; font-weight:600'>"
-            f"{arrow}{escape(word)}{tail}</span>"
+            f"{escape(text)}</span>"
         )
-
-    def _set_wrapped(self, label: QLabel, text: str, *, width: int | None = None) -> None:
-        """Set a word-wrapped label and give it the height of its wrapped text.
-
-        A box layout does not ask a wrapped label how tall it gets, so without this a
-        two-line message squeezes the rest of the card. The card width is fixed, so the
-        height can be measured here. An empty error label is hidden; an empty detail
-        label keeps one line, so the card does not jump.
-        """
-        if label is self.error_label:
-            label.setVisible(bool(text))
-        label.setText(text or " ")
-        width = width or self._inner_width()
-        label.setFixedHeight(max(label.heightForWidth(width), label.fontMetrics().height()))
-        self.updateGeometry()
-
-    def _hold_widths(self) -> None:
-        """Never let a row squeeze a control below the width of its text.
-
-        A box layout may shrink a button or a drop-down below its size hint. With this
-        floor, the card grows instead.
-        """
-        for widget in (
-            self.back_button,
-            self.forward_button,
-            self.step_box,
-            self.go_button,
-            self.speed_button,
-            self.home_button,
-            self.stop_button,
-            self.connect_button,
-            self.more_button,
-        ):
-            widget.setMinimumWidth(0)
-            widget.setMinimumWidth(widget.sizeHint().width())
-        self.updateGeometry()
-
-    def needed_width(self) -> int:
-        """The card width that its controls need (wrapped text does not count)."""
-        layout = self.layout()
-        return max(theme.CARD_WIDTH, layout.minimumSize().width() if layout else 0)
-
-    def set_card_width(self, width: int) -> None:
-        if width != self.width() or self.minimumWidth() != width:
-            self.setFixedWidth(width)
-            self._rewrap()
-
-    def _rewrap(self) -> None:
-        """Measure the wrapped labels again for the current card width."""
-        for label in (self.model_label, self.detail_label, self.error_label):
-            self._set_wrapped(label, label.text().strip())
-        self._set_wrapped(self.name_label, self.axis.label, width=self._name_width())
-
-    def _inner_width(self) -> int:
-        """The width inside the card. Wrapped labels are measured at this width."""
-        return self.minimumWidth() - 2 * theme.MARGIN - 2  # the frame border
-
-    def _name_width(self) -> int:
-        """The width left for the name next to the widest state pill."""
-        return self._inner_width() - _widest_pill() - theme.GAP
-
-    def _number_width(self, decimals: int) -> int:
-        """Room for a 4-digit number with ``decimals`` digits and a sign, plus padding."""
-        sample = "-0000." + "0" * decimals
-        return QFontMetrics(theme.number_font(theme.BODY_PX + 1)).horizontalAdvance(sample) + 22
 
     def _fmt(self, value: float) -> str:
         return f"{value:.{self.config.decimals}f}"
@@ -582,7 +469,7 @@ class StageCard(QFrame):
             return
         target = self.target_box.value()
         if target is None:
-            self._set_wrapped(self.error_label, "Type a target position first.")
+            self.error_label.setText("Type a target position first.")
             return
         self.worker.move_to(self.axis.to_device(target))  # the worker checks the range
 
@@ -621,13 +508,12 @@ class StageCard(QFrame):
 
     def _home(self) -> None:
         if self._confirm:
-            extra = (
-                " The CONEX-CC controller resets first."
-                if self.config.driver == "conex"
-                and self._status
+            resets = (
+                self.config.driver == "conex"
+                and self._status is not None
                 and self._status.state is not State.NOT_HOMED
-                else ""
             )
+            extra = " The CONEX-CC controller resets first." if resets else ""
             answer = QMessageBox.question(
                 self,
                 "Home stage",
@@ -658,7 +544,20 @@ class StageCard(QFrame):
     def _key(self, item: str) -> str:
         return f"stage/{self.config.name}/{item}"
 
-    @staticmethod
-    def _restyle(widget: QWidget) -> None:
-        widget.style().unpolish(widget)
-        widget.style().polish(widget)
+
+def _row(*items: object, stretch_first: bool = False) -> QHBoxLayout:
+    """A row of widgets. An item is a widget, or (widget, stretch[, alignment])."""
+    row = QHBoxLayout()
+    row.setSpacing(theme.GAP)
+    for index, item in enumerate(items):
+        widget, stretch, *align = item if isinstance(item, tuple) else (item, 0)
+        if stretch_first and index == 0:
+            stretch = 1
+        row.addWidget(widget, stretch, *align)
+    return row
+
+
+def _restyle(widget: QWidget) -> None:
+    """Apply a changed object name or property to the stylesheet."""
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)

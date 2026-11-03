@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from stagehand.axes import Axis
 from stagehand.gui import theme
 from stagehand.gui.icons import blank, icon
+from stagehand.gui.widgets import WrapLabel
 from stagehand.presets import Preset, PresetError, PresetStore
 from stagehand.stage import State
 from stagehand.worker import StageStatus, StageWorker
@@ -323,15 +324,15 @@ class PresetsPanel(QFrame):
         self.table.itemSelectionChanged.connect(self._update_buttons)
         self.table.cellDoubleClicked.connect(lambda _r, _c: self.go_to_selected())
 
-        self.error_label = QLabel(store.load_error)
+        # WrapLabel, not a word-wrapped QLabel: a QLabel with word wrap puts the whole
+        # window layout into height-for-width mode, and in that mode Qt squeezed the
+        # cards to keep this panel at its preferred height. resizeEvent sets the width.
+        self.error_label = WrapLabel(store.load_error, collapse=True)
         self.error_label.setObjectName("error")
-        self.error_label.setWordWrap(True)
-        self.error_label.setVisible(bool(store.load_error))
-        self.empty_label = QLabel(
+        self.empty_label = WrapLabel(
             "No presets yet. Move the stages where you want them, then press Save current."
         )
         self.empty_label.setObjectName("secondary")
-        self.empty_label.setWordWrap(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.MARGIN)
@@ -377,6 +378,12 @@ class PresetsPanel(QFrame):
     def set_axes(self, axes: dict[str, Axis]) -> None:
         self.axes = dict(axes)
         self.refresh()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        inner = self.width() - 2 * theme.MARGIN - 2
+        for label in (self.error_label, self.empty_label):
+            label.set_wrap_width(inner)
 
     def refresh(self, select: str | None = None) -> None:
         select = select or self.selected_name()

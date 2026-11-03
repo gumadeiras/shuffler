@@ -14,8 +14,8 @@ from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
+from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +37,7 @@ from stagehand.gui.axis_dialog import AxisDialog
 from stagehand.gui.icons import icon
 from stagehand.gui.presets_panel import PresetsPanel
 from stagehand.gui.stage_card import StageCard
+from stagehand.gui.widgets import ElidedLabel
 from stagehand.presets import PresetStore
 from stagehand.rig import driver_factory
 from stagehand.worker import StageWorker
@@ -60,38 +60,20 @@ DEMO_CONFIG = {
 }
 
 
-class ElidedLabel(QLabel):
-    """One line that ends in "…" when the window is too narrow; the tooltip has it all.
+class MainWindow(QMainWindow):
+    """Layout, top to bottom: a toolbar row, the cards row, the presets panel, status line.
 
-    A plain label would make the window as wide as the longest message.
+    All sizes come from the widgets' own size hints; nothing has a hand-set height. The
+    window's minimum size is the sum of the minimums, so the cards row and the presets
+    panel can never overlap, and the window grows if a card grows after it opens.
+
+    No widget in the window may use height-for-width (a word-wrapped QLabel does). One
+    such widget puts the whole window layout into height-for-width mode, and in that
+    mode Qt squeezed the cards below their minimum to keep the presets panel at its
+    preferred height: the presets panel covered the Home and Stop buttons. Wrapped text
+    uses ``WrapLabel`` instead, and a test checks this rule.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._full = ""
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-
-    def setText(self, text: str) -> None:
-        self._full = text
-        self._elide()
-
-    def text(self) -> str:
-        return self._full
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._elide()
-
-    def minimumSizeHint(self) -> QSize:
-        return QSize(0, super().minimumSizeHint().height())
-
-    def _elide(self) -> None:
-        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(self.width(), 0))
-        super().setText(shown)
-        self.setToolTip(self._full if shown != self._full else "")
-
-
-class MainWindow(QMainWindow):
     def __init__(
         self,
         app_config: AppConfig,
@@ -110,11 +92,6 @@ class MainWindow(QMainWindow):
         self.axes = axes or AxisStore(app_config.axes_path, keys)
         self.setWindowTitle("stagehand" + (" (demo)" if demo else ""))
 
-        title = QLabel(
-            f"<span style='font-size:{theme.TITLE_PX}px; font-weight:700'>stagehand</span>"
-            f"&nbsp;&nbsp;<span style='color:{theme.INK_SOFT}'>motorized stages</span>"
-        )
-        title.setTextFormat(Qt.RichText)
         demo_badge = QLabel("DEMO · simulated stages")
         demo_badge.setObjectName("demo")
         demo_badge.setVisible(demo)
@@ -131,10 +108,9 @@ class MainWindow(QMainWindow):
             context=Qt.ApplicationShortcut,
         )
 
+        # The window title bar already names the app, so the toolbar holds only controls.
         header = QHBoxLayout()
         header.setSpacing(theme.GAP)
-        header.addWidget(title, 0, Qt.AlignVCenter)
-        header.addSpacing(theme.UNIT)
         header.addWidget(demo_badge, 0, Qt.AlignVCenter)
         header.addStretch(1)
         header.addWidget(self.connect_all_button)
@@ -147,14 +123,14 @@ class MainWindow(QMainWindow):
         for card in self.cards:
             card.settings_requested.connect(lambda c=card: self.edit_stage(c))
             card.move_requested.connect(lambda offset, c=card: self.move_stage(c, offset))
-        self.cards_box = QWidget()
+        self.cards_box = QWidget()  # the cards row, as one item of the window layout
         self.cards_row = QHBoxLayout(self.cards_box)
         self.cards_row.setContentsMargins(0, 0, 0, 0)
         self.cards_row.setSpacing(theme.SECTION_GAP)
 
         # Status line: a permanent label, so the text keeps the window margin (a Qt
         # temporary message is drawn against the edge). say() shows a message for a while.
-        self.status_label = ElidedLabel()
+        self.status_label = ElidedLabel()  # a long message ends in "…"; never widens
         self.status_label.setObjectName("secondary")
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().setContentsMargins(theme.MARGIN - 2, 0, theme.MARGIN, 4)
@@ -183,6 +159,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.cards_box)
         layout.addWidget(self.presets, 1)
         self.setCentralWidget(central)
+        self._fit_cards()
 
         where = app_config.presets_path if not demo else "a temporary file (demo)"
         self._resting_message = f"stagehand {__version__}  ·  presets: {where}"
@@ -190,13 +167,10 @@ class MainWindow(QMainWindow):
         if self.axes.load_error:
             self.say(self.axes.load_error, 60000)
         geometry = self.settings.value("window/geometry")
-        if geometry is not None:
-            self.restoreGeometry(geometry)
-        else:
-            width = len(self.cards) * (theme.CARD_WIDTH + theme.SECTION_GAP) + 2 * theme.MARGIN
-            self.resize(max(width, 760), 820)
+        if geometry is None or not self.restoreGeometry(geometry):
+            hint = self.sizeHint()
+            self.resize(hint.width(), hint.height() + 160)  # room for a few preset rows
 
-        self._card_height = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(REFRESH_MS)
@@ -247,20 +221,14 @@ class MainWindow(QMainWindow):
         self.presets.set_order(order)
 
     def _fit_cards(self) -> None:
-        """One width for every card, and the cards row as tall as the tallest card.
+        """One width for every card: the widest that any card's controls need.
 
-        The width is the widest that any card's controls need (at least CARD_WIDTH), so
-        no control is cut and the cards line up. A card grows taller when a message wraps
-        to more lines; the window layout does not always take that change from the nested
-        row, so the row height is set here.
+        At least CARD_WIDTH, so no control is cut and the cards line up. Heights need no
+        help: every widget in a card reports its real height (see gui/widgets.py).
         """
         width = max((card.needed_width() for card in self.cards), default=theme.CARD_WIDTH)
         for card in self.cards:
             card.set_card_width(width)
-        height = max((card.sizeHint().height() for card in self.cards), default=0)
-        if height != self._card_height:
-            self._card_height = height
-            self.cards_box.setFixedHeight(height)
 
     def say(self, text: str, milliseconds: int = 8000) -> None:
         """Show a message in the status line, then go back to the resting text."""

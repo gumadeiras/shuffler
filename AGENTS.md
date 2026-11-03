@@ -16,6 +16,12 @@ Mass flow controllers will be added later, following sniffler's Alicat code.
 - Expected device failures raise `DeviceError` with text for the user; no tracebacks
   in the window.
 - Keep the sniffler look (`gui/theme.py`). The contrast test checks every text pair.
+- Layout: no hand-set heights. For wrapped text use `gui/widgets.WrapLabel`, never a
+  word-wrapped `QLabel` in the main window: one height-for-width widget made Qt squeeze
+  the cards under the presets panel. `gui/fit.find_cropped` finds cut text, overflow,
+  and overlapping widgets; the tests run it, including after the cards grow.
+- Check the look with the real Windows fonts, not only the offscreen platform: render
+  with `Qt.WA_DontShowOnScreen` on the default platform.
 - Use ASD-STE100 Simplified Technical English in user text.
 
 ## Validation

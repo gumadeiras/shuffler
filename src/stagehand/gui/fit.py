@@ -19,16 +19,59 @@ SLACK = 1  # pixels of rounding
 
 
 def find_cropped(root: QWidget) -> list[str]:
+    """Every widget whose text does not fit, that reaches outside its parent, or that
+    overlaps a sibling (one drawn over another, as when a panel covers a row of buttons).
+    """
     problems = []
-    for widget in [root, *root.findChildren(QWidget)]:
-        if not widget.isVisibleTo(root) or widget.width() <= 0:
-            continue
+    widgets = [w for w in [root, *root.findChildren(QWidget)] if _shown(w, root)]
+    for widget in widgets:
         if type(widget).__name__ == "ElidedLabel":
             continue
         problem = _check(widget) or _overflow(widget, root)
         if problem:
             problems.append(f"{type(widget).__name__} {problem}")
+    for parent in widgets:
+        if _in_scroll_area(parent, root):
+            continue
+        children = [c for c in parent.findChildren(QWidget, options=_direct()) if _shown(c, root)]
+        for index, first in enumerate(children):
+            for second in children[index + 1 :]:
+                overlap = first.geometry().intersected(second.geometry())
+                if overlap.width() > SLACK and overlap.height() > SLACK:
+                    problems.append(
+                        f"{_name(first)} and {_name(second)} overlap by "
+                        f"{overlap.width()}x{overlap.height()} px"
+                    )
     return problems
+
+
+def _shown(widget: QWidget, root: QWidget) -> bool:
+    return (
+        widget.isVisibleTo(root)
+        and widget.width() > 0
+        and (widget is root or not widget.isWindow())
+    )
+
+
+def _direct():
+    from PySide6.QtCore import Qt
+
+    return Qt.FindDirectChildrenOnly
+
+
+def _in_scroll_area(widget: QWidget, root: QWidget) -> bool:
+    ancestor: QWidget | None = widget
+    while ancestor is not None and ancestor is not root:
+        if isinstance(ancestor, QAbstractScrollArea):
+            return True
+        ancestor = ancestor.parentWidget()
+    return False
+
+
+def _name(widget: QWidget) -> str:
+    text = getattr(widget, "text", None)
+    label = text() if callable(text) else widget.objectName()
+    return f"{type(widget).__name__} {label!r}" if label else type(widget).__name__
 
 
 def _overflow(widget: QWidget, root: QWidget) -> str:

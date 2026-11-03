@@ -345,6 +345,46 @@ class WindowTest(unittest.TestCase):
 
     # -- layout -----------------------------------------------------------------------------
 
+    def test_no_widget_uses_height_for_width(self) -> None:
+        """One word-wrapped QLabel puts the window layout into height-for-width mode, and in
+        that mode Qt squeezed the cards under the presets panel. Use WrapLabel instead."""
+        from PySide6.QtWidgets import QWidget
+
+        offenders = [
+            f"{type(w).__name__} {getattr(w, 'text', lambda: '')()!r}"
+            for w in self.window.findChildren(QWidget)
+            if w.hasHeightForWidth()
+        ]
+        self.assertEqual(offenders, [])
+        self.assertFalse(self.window.centralWidget().layout().hasHeightForWidth())
+
+    def test_cards_that_grow_after_launch_keep_their_height(self) -> None:
+        """The launch that hid the Home buttons: a window opened at a remembered size that
+        is tight, then the stages connect and the cards grow (speed fields fill in)."""
+        from stagehand.gui.fit import find_cropped
+
+        self.window.show()
+        APP.processEvents()
+        tight = self.window.minimumSizeHint()
+        self.window.resize(tight.width(), tight.height() + 20)  # room only before connect
+        APP.processEvents()
+        self.ready()  # connect and home: every card grows
+        self.workers[0].move_to(-99.0)  # and one shows a two-line error
+        self.run_all()
+        for _ in range(3):
+            APP.processEvents()
+        problems = find_cropped(self.window)
+        self.assertEqual(problems, [])
+        card_bottom = max(
+            c.mapTo(self.window, c.rect().bottomLeft()).y() for c in self.window.cards
+        )
+        presets_top = self.window.presets.mapTo(
+            self.window, self.window.presets.rect().topLeft()
+        ).y()
+        self.assertLess(card_bottom, presets_top, "the presets panel must not cover the cards")
+        for card in self.window.cards:
+            self.assertGreaterEqual(card.home_button.height(), card.home_button.sizeHint().height())
+
     def test_no_text_is_cut_at_the_smallest_window(self) -> None:
         from stagehand.gui.fit import find_cropped
 
