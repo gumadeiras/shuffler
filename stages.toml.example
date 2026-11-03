@@ -47,6 +47,6 @@ port = "COM4"
 name = "DDS100"
 driver = "kinesis"
 serial = "28253849"
-jog_steps = [0.01, 0.1, 1.0, 10.0]
+jog_steps = [0.001, 0.01, 0.1, 1.0, 10.0]
 # velocity = 10.0
 # max_velocity = 50.0

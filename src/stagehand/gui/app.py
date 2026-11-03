@@ -55,14 +55,15 @@ DEMO_CONFIG = {
             "name": "DDS100",
             "driver": "kinesis",
             "serial": "28253849",
-            "jog_steps": [0.01, 0.1, 1.0, 10.0],
+            "jog_steps": [0.001, 0.01, 0.1, 1.0, 10.0],
         },
     ],
 }
 
 
 class MainWindow(QMainWindow):
-    """Layout, top to bottom: a toolbar row, the cards row, the presets panel, status line.
+    """Layout, top to bottom: the cards row, the presets panel, and a footer with the
+    status text, Connect all, and Stop all.
 
     All sizes come from the widgets' own size hints; nothing has a hand-set height. The
     window's minimum size is the sum of the minimums, so the cards row and the presets
@@ -109,14 +110,6 @@ class MainWindow(QMainWindow):
             context=Qt.ApplicationShortcut,
         )
 
-        # The window title bar already names the app, so the toolbar holds only controls.
-        header = QHBoxLayout()
-        header.setSpacing(theme.GAP)
-        header.addWidget(demo_badge, 0, Qt.AlignVCenter)
-        header.addStretch(1)
-        header.addWidget(self.connect_all_button)
-        header.addWidget(self.stop_all_button)
-
         self.cards = [
             StageCard(w, confirm_moves=app_config.confirm_moves, settings=self.settings)
             for w in self.workers
@@ -129,13 +122,10 @@ class MainWindow(QMainWindow):
         self.cards_row.setContentsMargins(0, 0, 0, 0)
         self.cards_row.setSpacing(theme.SECTION_GAP)
 
-        # Status line: a permanent label, so the text keeps the window margin (a Qt
-        # temporary message is drawn against the edge). say() shows a message for a while.
-        self.status_label = ElidedLabel()  # a long message ends in "…"; never widens
+        # Status text; say() shows a message for a while. A long message ends in "…" and
+        # never makes the window wider.
+        self.status_label = ElidedLabel()
         self.status_label.setObjectName("secondary")
-        self.statusBar().setSizeGripEnabled(False)
-        self.statusBar().setContentsMargins(theme.MARGIN - 2, 0, theme.MARGIN, 4)
-        self.statusBar().addWidget(self.status_label, 1)
         self._resting_message = ""
         self._message_timer = QTimer(self)
         self._message_timer.setSingleShot(True)
@@ -153,13 +143,23 @@ class MainWindow(QMainWindow):
         self.presets.set_axes({c.worker.name: c.axis for c in self.cards})
         self._arrange(self.axes.order())
 
+        # The footer: status text, then the controls for all stages. Stop all stays in
+        # view at the bottom right, turns pink while a stage moves, and Esc works from
+        # anywhere. A separate toolbar row above the cards would hold only these buttons.
+        footer = QHBoxLayout()
+        footer.setSpacing(theme.GAP)
+        footer.addWidget(demo_badge, 0, Qt.AlignVCenter)
+        footer.addWidget(self.status_label, 1, Qt.AlignVCenter)
+        footer.addWidget(self.connect_all_button)
+        footer.addWidget(self.stop_all_button)
+
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.UNIT)
+        layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.MARGIN)
         layout.setSpacing(theme.SECTION_GAP)
-        layout.addLayout(header)
         layout.addWidget(self.cards_box)
         layout.addWidget(self.presets, 1)
+        layout.addLayout(footer)
         self.setCentralWidget(central)
         self._fit_cards()
 

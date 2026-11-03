@@ -195,8 +195,6 @@ QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid {NAVY}; bor
     background: {PANEL}; }}
 QCheckBox::indicator:checked {{ background: {NAVY}; image: url({CHECK_MARK}); }}
 QCheckBox::indicator:disabled {{ border-color: {DISABLED}; }}
-QStatusBar {{ color: {INK_SOFT}; padding-left: {MARGIN}px; }}
-QStatusBar QLabel {{ color: {INK_SOFT}; }}
 QMenu {{ background: {PANEL}; border: 1px solid {LINE}; padding: 4px; }}
 QMenu::item {{ padding: 6px 18px 6px 10px; color: {NAVY}; border-radius: 4px; }}
 QMenu::item:selected {{ background: {NAVY_WASH}; }}

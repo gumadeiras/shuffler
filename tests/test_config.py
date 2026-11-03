@@ -21,7 +21,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(app.stage_names, ("CONEX A", "CONEX B", "DDS100"))
         self.assertEqual(app.stages[0].port, "COM3")
         self.assertEqual(app.stages[2].serial, "28253849")
-        self.assertEqual(app.stages[2].jog_steps, (0.01, 0.1, 1.0, 10.0))
+        self.assertEqual(app.stages[2].jog_steps, (0.001, 0.01, 0.1, 1.0, 10.0))
         self.assertEqual(app.presets_path, ROOT / "presets.json")
 
     def test_defaults(self) -> None:
