@@ -308,6 +308,62 @@ class WindowTest(unittest.TestCase):
             self.edit("X", "X", reversed=True)  # never connected: travel unknown
         warning.assert_called_once()
 
+    # -- speed ------------------------------------------------------------------------------
+
+    def test_set_speed_from_the_card_and_keep_it(self) -> None:
+        self.ready()
+        card = self.card("Z")
+        self.assertEqual(card.speed_box.text(), "50.000")
+        self.assertFalse(card.speed_button.isEnabled(), "nothing to set yet")
+        card.speed_box.setText("20")
+        card.speed_box.textEdited.emit("20")
+        self.assertTrue(card.speed_button.isEnabled())
+        card.speed_button.click()
+        self.run_all()
+        self.assertEqual(self.workers[1].status.velocity, 20.0)
+        self.assertEqual(card.speed_box.text(), "20.000")
+        saved = AxisStore(self.app_config.axes_path, self.app_config.stage_names)
+        self.assertEqual(saved.get("Z").speed, 20.0)
+
+    def test_a_much_faster_speed_asks_first(self) -> None:
+        self.ready()
+        card = self.card("X")  # 10 mm/s now
+        card.speed_box.setText("25")
+        card.speed_box.textEdited.emit("25")
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Cancel) as ask:
+            card.speed_button.click()
+        ask.assert_called_once()
+        self.run_all()
+        self.assertEqual(self.workers[0].status.velocity, 10.0)
+
+    def test_travel_bar_is_a_readout(self) -> None:
+        from PySide6.QtCore import Qt
+
+        bar = self.card("X").bar
+        self.assertTrue(bar.testAttribute(Qt.WA_TransparentForMouseEvents))
+        self.assertEqual(bar.focusPolicy(), Qt.NoFocus)
+
+    # -- layout -----------------------------------------------------------------------------
+
+    def test_no_text_is_cut_at_the_smallest_window(self) -> None:
+        from stagehand.gui.fit import find_cropped
+
+        self.ready()
+        self.edit("X", "A rather long axis name", "back-forward", reversed=True)
+        self.store.save("A preset with a fairly long descriptive name", {"X": 5.0, "Z": 7.0})
+        self.window.presets.refresh()
+        self.workers[1].move_to(1000.0)  # refused: a two-line error on the card
+        self.run_all()
+        self.window.show()
+        for size in (self.window.minimumSizeHint(), self.window.size()):
+            self.window.resize(size)
+            for _ in range(3):
+                APP.processEvents()
+            self.window.refresh()
+            APP.processEvents()
+            with self.subTest(size=f"{size.width()}x{size.height()}"):
+                self.assertEqual(find_cropped(self.window), [])
+
     def test_move_cards_and_preset_columns(self) -> None:
         self.card("Z").move_requested.emit(-1)
         self.assertEqual([c.worker.name for c in self.window.cards], ["Z", "X"])

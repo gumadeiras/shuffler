@@ -18,6 +18,7 @@ the idle check while the first one starts.
 
 import contextlib
 import logging
+import math
 import queue
 import threading
 import time
@@ -46,6 +47,7 @@ class StageStatus:
     target: float | None = None
     info: StageInfo | None = None
     allowed: tuple[float, float] | None = None
+    velocity: float | None = None  # the speed moves use now, units/s
     detail: str = ""
     error: str = ""
 
@@ -72,6 +74,9 @@ class StageWorker:
         # Controller coordinate -> the number the window shows (a reversed axis mirrors it).
         # Used only in messages; the window sets it.
         self.display: Callable[[float], float] = lambda value: value
+        # The speed this stage should use (units/s). The window loads the saved value; a
+        # successful set_velocity() updates it, and the window saves it. Applied on connect.
+        self.speed: float | None = None
         self._make_driver = make_driver
         self._poll_s = poll_s
         self._clock = clock
@@ -120,6 +125,9 @@ class StageWorker:
 
     def reset(self) -> None:
         self._put("reset")
+
+    def set_velocity(self, velocity: float) -> None:
+        self._put("set_velocity", velocity)
 
     def stop(self) -> None:
         """Drop queued motion, interrupt a long sequence, then stop."""
@@ -208,11 +216,51 @@ class StageWorker:
             info.units,
         )
         self._poll()
+        problems = []
         if allowed is None:
-            self._set(
-                error=f"min and max in stages.toml are outside the controller travel "
+            problems.append(
+                f"min and max in stages.toml are outside the controller travel "
                 f"({info.lower:g} to {info.upper:g} {info.units}). Moves are blocked."
             )
+        if self.speed is not None:  # the controller forgets the speed on power-off
+            try:
+                self._check_speed(self.speed)
+                driver.set_velocity(self.speed)
+                log.info("%s: speed %g %s/s applied", self._who, self.speed, info.units)
+            except DeviceError as error:
+                problems.append(f"The saved speed was not applied: {error}")
+        self._read_velocity()
+        if problems:
+            self._set(error=" ".join(problems))
+
+    def _do_set_velocity(self, velocity: float) -> None:
+        driver = self._connected_driver()
+        self._refuse_if_busy("Set the speed when the stage is still.")
+        self._check_speed(velocity)
+        driver.set_velocity(velocity)
+        self.speed = velocity
+        self._read_velocity()
+        log.info("%s: speed set to %g %s/s", self._who, velocity, self.config.units)
+
+    def _check_speed(self, velocity: float) -> None:
+        units = self.config.units
+        if not math.isfinite(velocity) or velocity <= 0:
+            raise DeviceError(f"{self.label}: the speed must be more than 0 {units}/s.")
+        info = self._status.info
+        if info is not None and info.max_velocity is not None and velocity > info.max_velocity:
+            raise DeviceError(
+                f"{self.label}: {velocity:g} {units}/s is above the controller maximum "
+                f"of {info.max_velocity:g} {units}/s."
+            )
+
+    def _read_velocity(self) -> None:
+        """The speed the controller reports. A read failure does not stop the stage."""
+        assert self._driver is not None
+        try:
+            self._set(velocity=self._driver.get_velocity())
+        except DeviceError as error:
+            log.warning("%s: %s", self._who, error)
+            self._set(velocity=None)
 
     def _do_disconnect(self) -> None:
         driver, self._driver = self._driver, None
@@ -227,7 +275,7 @@ class StageWorker:
         finally:
             driver.close()
             self._latch = None
-            self._set(state=State.OFFLINE, position=None, target=None, detail="")
+            self._set(state=State.OFFLINE, position=None, target=None, velocity=None, detail="")
             log.info("%s disconnected", self._who)
 
     def _do_move_to(self, target: float) -> None:
@@ -285,6 +333,7 @@ class StageWorker:
         driver.reset()
         self._latch = None
         self._set(target=None)
+        self._read_velocity()  # the driver applies the speed again after a reboot
         log.info("%s: reset", self._who)
 
     def _poll(self) -> None:

@@ -34,6 +34,7 @@ def demo_stage(stage: StageConfig) -> FakeStage:
             upper=100.0,
             start=50.0,
             velocity=20.0,
+            max_velocity=500.0,  # the DDS100 rating
         )
     return FakeStage(
         stage.address,

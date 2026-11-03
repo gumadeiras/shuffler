@@ -104,8 +104,21 @@ class AxisStoreTest(unittest.TestCase):
         data = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(
             data["axes"]["CONEX A"],
-            {"label": "Y", "direction": "down-up", "reversed": False, "travel": None},
+            {
+                "label": "Y",
+                "direction": "down-up",
+                "reversed": False,
+                "travel": None,
+                "speed": None,
+            },
         )
+
+    def test_speed_persists(self) -> None:
+        store = AxisStore(self.path, KEYS)
+        store.remember_speed("DDS100", 12.5)
+        self.assertEqual(AxisStore(self.path, KEYS).get("DDS100").speed, 12.5)
+        with self.assertRaisesRegex(AxisError, "more than zero"):
+            store.remember_speed("DDS100", 0)
 
 
 if __name__ == "__main__":

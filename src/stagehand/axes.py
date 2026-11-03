@@ -45,6 +45,7 @@ class Axis:
     direction: str = "none"
     reversed: bool = False
     travel: tuple[float, float] | None = None  # the controller's limits, saved on connect
+    speed: float | None = None  # units/s set in the window; applied on each connect
 
     @property
     def words(self) -> tuple[str, str]:
@@ -130,6 +131,14 @@ class AxisStore:
         self._write({**self._axes, key: axis}, self._order)
         return axis
 
+    def remember_speed(self, key: str, speed: float) -> Axis:
+        """Save the speed that the controller accepted."""
+        if not (math.isfinite(speed) and speed > 0):
+            raise AxisError("The speed must be more than zero.")
+        axis = replace(self.get(key), speed=speed)
+        self._write({**self._axes, key: axis}, self._order)
+        return axis
+
     def remember_travel(self, key: str, lower: float, upper: float) -> Axis:
         """Save the controller's limits when they change. Returns the axis now in use."""
         axis = self.get(key)
@@ -166,11 +175,17 @@ class AxisStore:
                         raise ValueError(f"bad travel for {key}")
                     travel = (low, high)
                 direction = str(item.get("direction", "none"))
+                speed = item.get("speed")
+                if speed is not None:
+                    speed = float(speed)
+                    if not (math.isfinite(speed) and speed > 0):
+                        raise ValueError(f"bad speed for {key}")
                 axes[str(key)] = Axis(
                     label=str(item.get("label", key)),
                     direction=direction if direction in DIRECTIONS else "none",
                     reversed=bool(item.get("reversed", False)) and travel is not None,
                     travel=travel,
+                    speed=speed,
                 )
             order = [str(k) for k in data.get("order", [])]
         except (ValueError, TypeError, AttributeError) as error:
@@ -191,6 +206,7 @@ class AxisStore:
                     "direction": axis.direction,
                     "reversed": axis.reversed,
                     "travel": list(axis.travel) if axis.travel else None,
+                    "speed": axis.speed,
                 }
                 for key, axis in axes.items()
             },

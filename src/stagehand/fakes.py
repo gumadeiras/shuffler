@@ -17,6 +17,7 @@ class FakeStage:
         upper: float = 25.0,
         start: float | None = None,
         velocity: float = 5.0,
+        max_velocity: float | None = None,
         homed: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -25,6 +26,7 @@ class FakeStage:
         self.units = units
         self.lower, self.upper = lower, upper
         self.velocity = velocity
+        self.max_velocity = max_velocity
         self.clock = clock
         self.commands: list[str] = []  # what was sent, for the tests
         self.fail_open: str | None = None
@@ -42,7 +44,20 @@ class FakeStage:
             raise DeviceError(self.fail_open)
         self.connected = True
         self.commands.append("open-read-only" if read_only else "open")
-        return StageInfo(self.model, self.address, self.units, self.lower, self.upper)
+        return StageInfo(
+            self.model, self.address, self.units, self.lower, self.upper, self.max_velocity
+        )
+
+    def get_velocity(self) -> float:
+        return self.velocity
+
+    def set_velocity(self, velocity: float) -> None:
+        self.commands.append(f"set_velocity {velocity:g}")
+        if self.max_velocity is not None and velocity > self.max_velocity:
+            raise DeviceError("Simulated stage refused the speed: above its maximum.")
+        here = self._position()  # a move in progress keeps its place
+        self._origin, self._started = here, self.clock()
+        self.velocity = velocity
 
     def close(self) -> None:
         self.connected = False

@@ -43,6 +43,7 @@ class StageInfo:
     units: str
     lower: float  # travel limits that the controller enforces
     upper: float
+    max_velocity: float | None = None  # units/s, when the controller reports one
 
 
 @dataclass(frozen=True)
@@ -75,4 +76,12 @@ class StageDriver(Protocol):
 
     def reset(self) -> None:
         """Clear a fault. A CONEX-CC reboots and must be homed again."""
+        ...
+
+    def get_velocity(self) -> float:
+        """The speed that moves use now, in units/s."""
+        ...
+
+    def set_velocity(self, velocity: float) -> None:
+        """Set the speed for the next moves. The driver applies it again after a reset."""
         ...

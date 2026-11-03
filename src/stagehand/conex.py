@@ -6,9 +6,9 @@ code before the value (``1TP12.345``). A command that sets something returns no
 reply, so each one is followed by ``TE`` (last command error).
 
 This module sends only these commands:
-  queries  VE, ID?, SL?, SR?, TP, TS, TE
+  queries  VE, ID?, SL?, SR?, TP, TS, TE, VA?
   motion   PA (move absolute), OR (home search), ST (stop)
-  other    RS (reset: reboot the controller), VA (velocity, only if configured)
+  other    RS (reset: reboot the controller), VA (velocity, set from the window)
 It never enters configuration mode (PW) and never changes the home type (HT) or
 stored limits.
 """
@@ -230,6 +230,14 @@ class ConexStage:
         else:
             raise DeviceError(f"The controller on {self.port} did not come back after the reset.")
         raise DeviceError(f"Reset of {self.port} interrupted by Stop. Check the stage state.")
+
+    def get_velocity(self) -> float:
+        return self._query_number("VA?")
+
+    def set_velocity(self, velocity: float) -> None:
+        """VA is a working value: the controller forgets it on reset, so keep it here."""
+        self._command(f"VA{format_number(velocity)}")
+        self._velocity = velocity
 
     def _apply_velocity(self) -> None:
         if self._velocity is not None and not self._read_only:

@@ -277,6 +277,37 @@ class WorkerTest(unittest.TestCase):
         self.run_all(worker)
         self.assertIn("move_to 25", stage.commands)
 
+    def test_set_speed(self) -> None:
+        worker, stage = self.connected_and_homed()
+        self.assertEqual(worker.status.velocity, 10.0)
+        worker.set_velocity(2.5)
+        self.run_all(worker)
+        self.assertEqual(worker.status.velocity, 2.5)
+        self.assertEqual(worker.speed, 2.5)
+        self.assertIn("set_velocity 2.5", stage.commands)
+
+    def test_speed_rules(self) -> None:
+        worker, stage = self.connected_and_homed()
+        stage.max_velocity = 50.0
+        worker._set(info=stage.open())  # the controller reports its maximum
+        for bad, message in ((0.0, "more than 0"), (-1.0, "more than 0"), (80.0, "maximum")):
+            worker.set_velocity(bad)
+            self.run_all(worker)
+            self.assertIn(message, worker.status.error)
+        worker.move_to(20.0)
+        worker.set_velocity(3.0)
+        self.run_all(worker)
+        self.assertIn("still", worker.status.error, "no speed change during a move")
+        self.assertFalse(any(c.startswith("set_velocity") for c in stage.commands))
+
+    def test_saved_speed_is_applied_on_connect(self) -> None:
+        worker, stage = self.make()
+        worker.speed = 1.5
+        worker.connect()
+        self.run_all(worker)
+        self.assertIn("set_velocity 1.5", stage.commands)
+        self.assertEqual(worker.status.velocity, 1.5)
+
     def test_reset_requires_homing_again(self) -> None:
         worker, _ = self.connected_and_homed()
         worker.reset()

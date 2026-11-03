@@ -318,6 +318,7 @@ class PresetsPanel(QFrame):
         self.table.setWordWrap(False)
         self.table.setFocusPolicy(Qt.StrongFocus)
         self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.setMinimumHeight(36 + 3 * 32)  # the header and three presets
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.itemSelectionChanged.connect(self._update_buttons)
         self.table.cellDoubleClicked.connect(lambda _r, _c: self.go_to_selected())
@@ -416,6 +417,14 @@ class PresetsPanel(QFrame):
             self.table.setItem(row, last, saved)
             if preset.name == select:
                 self.table.selectRow(row)
+        # The name column stretches, but never below its longest name: the table asks for
+        # enough width, so Qt never shortens a name with "…".
+        needed = max(self.table.sizeHintForColumn(0), header.sectionSizeHint(0))
+        needed += sum(
+            max(self.table.sizeHintForColumn(c), header.sectionSizeHint(c))
+            for c in range(1, last + 1)
+        )
+        self.table.setMinimumWidth(needed + 2 * self.table.frameWidth() + 4)
         empty = not self.store.presets
         self.empty_label.setVisible(empty)
         self.table.setToolTip("" if empty else "Double-click a preset to go to it.")

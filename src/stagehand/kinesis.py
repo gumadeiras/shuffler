@@ -189,6 +189,10 @@ class KinesisStage:
             limits = device.AdvancedMotorLimits
             lower = to_float(limits.LengthMinimum)
             upper = to_float(limits.LengthMaximum)
+            try:
+                max_velocity: float | None = to_float(limits.VelocityMaximum) or None
+            except Exception:
+                max_velocity = None
             stage_name = str(configuration.DeviceSettingsName or "").strip()
         except DeviceError:
             self.close()
@@ -199,7 +203,12 @@ class KinesisStage:
         description = str(info.Description or family.product).strip()
         model = " · ".join(p for p in (description, stage_name) if p)
         return StageInfo(
-            model=model, address=f"SN {self.serial}", units=self._units, lower=lower, upper=upper
+            model=model,
+            address=f"SN {self.serial}",
+            units=self._units,
+            lower=lower,
+            upper=upper,
+            max_velocity=max_velocity,
         )
 
     def close(self) -> None:
@@ -254,6 +263,25 @@ class KinesisStage:
             self._call("stop", lambda d: d.Stop(0))
         except DeviceError:
             self._call("stop", lambda d: d.StopImmediate())
+
+    def get_velocity(self) -> float:
+        device = self._require()
+        try:
+            return to_float(device.GetVelocityParams().MaxVelocity)
+        except Exception as error:
+            raise DeviceError(
+                f"Thorlabs {self.serial}: cannot read the speed: {_message(error)}"
+            ) from None
+
+    def set_velocity(self, velocity: float) -> None:
+        """The move speed; the acceleration stays as it is."""
+
+        def apply(device: Any) -> None:
+            acceleration = device.GetVelocityParams().Acceleration
+            device.SetVelocityParams(to_decimal(velocity), acceleration)
+
+        self._call("the speed", apply)
+        self._velocity = velocity
 
     def reset(self) -> None:
         def reset(device: Any) -> None:

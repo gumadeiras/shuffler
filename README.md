@@ -69,8 +69,15 @@ uv run stagehand-gui --demo     # simulated stages; no hardware is touched
    stage to its home position at one end of its travel, so check that the path is
    clear. A CONEX-CC loses its home after power-off or a reset.
 3. Type a target and press **Enter** (or **Go**), or use **−** and **+** with a step
-   size. Repeated jogs add up exactly (they continue from the last target).
-4. **Presets → Save current…** stores the positions of the stages you pick. A pin
+   size. Repeated jogs add up exactly (they continue from the last target). The bar
+   under the position shows where the stage is in its travel; it is a readout only.
+4. **Speed** sets how fast moves and jogs go (mm/s). Type a value and press **Enter**
+   or **Set**. stagehand saves it and applies it again each time the stage connects
+   (the controllers forget it at power-off). It cannot change during a move, it must
+   be below the controller maximum when the controller reports one (the DDS100 does),
+   and a speed more than twice the current one asks first. Homing uses the
+   controller's own homing speed.
+5. **Presets → Save current…** stores the positions of the stages you pick. A pin
    marks the preset that the stages are at now. Double-click a preset to go to it:
    a dialog shows each move (now, target, change) and you can leave stages out.
 
@@ -90,8 +97,9 @@ uv run stagehand-gui --demo     # simulated stages; no hardware is touched
 - Going to a preset moves the checked stages at the same time.
 - Closing the window while a stage moves asks first, then stops the stage.
 - stagehand never writes controller configuration (no CONEX configuration mode, no
-  home-type or stored-limit changes). An optional `velocity` in `stages.toml` sets the
-  working speed when the stage connects.
+  home-type or stored-limit changes). The speed is a working value: the window sets
+  it, and an optional `velocity` in `stages.toml` sets a starting speed until one is
+  set in the window.
 
 ## Diagnostics (nothing moves)
 
@@ -108,7 +116,7 @@ A log of every command is written to `stagehand.log` next to `stages.toml`.
 |---|---|
 | `stages.toml` | this rig's stages (git-ignored; start from `stages.toml.example`) |
 | `presets.json` | saved positions (git-ignored; rewritten atomically) |
-| `axes.json` | stage names, directions, Reverse, and card order, set in the window (git-ignored) |
+| `axes.json` | stage names, directions, Reverse, speed, and card order, set in the window (git-ignored) |
 | `src/stagehand/conex.py` | Newport CONEX-CC ASCII protocol (pyserial) |
 | `src/stagehand/kinesis.py` | Thorlabs K-Cubes (KBD101, KDC101, KST101) via Kinesis .NET |
 | `src/stagehand/worker.py` | one thread per stage; all motion rules |
@@ -127,6 +135,8 @@ uv run python -m unittest discover -s tests
 ```
 
 The tests use simulated stages and the offscreen Qt platform. They never open a port.
+`gui/fit.py` checks that no text is cut and no control reaches outside its card; a
+test runs it at the smallest window size.
 
 ### Adding the mass flow controllers later
 

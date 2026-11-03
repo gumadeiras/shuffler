@@ -14,8 +14,8 @@ from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -57,6 +58,37 @@ DEMO_CONFIG = {
         },
     ],
 }
+
+
+class ElidedLabel(QLabel):
+    """One line that ends in "…" when the window is too narrow; the tooltip has it all.
+
+    A plain label would make the window as wide as the longest message.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+
+    def setText(self, text: str) -> None:
+        self._full = text
+        self._elide()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._elide()
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(0, super().minimumSizeHint().height())
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(self.width(), 0))
+        super().setText(shown)
+        self.setToolTip(self._full if shown != self._full else "")
 
 
 class MainWindow(QMainWindow):
@@ -122,7 +154,7 @@ class MainWindow(QMainWindow):
 
         # Status line: a permanent label, so the text keeps the window margin (a Qt
         # temporary message is drawn against the edge). say() shows a message for a while.
-        self.status_label = QLabel()
+        self.status_label = ElidedLabel()
         self.status_label.setObjectName("secondary")
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().setContentsMargins(theme.MARGIN - 2, 0, theme.MARGIN, 4)
@@ -137,7 +169,9 @@ class MainWindow(QMainWindow):
         self.presets = PresetsPanel(store, self.workers, confirm_moves=app_config.confirm_moves)
         self.presets.message.connect(self.say)
         for card in self.cards:
-            self._apply_axis(card, self.axes.get(card.worker.name), refresh=False)
+            axis = self.axes.get(card.worker.name)
+            card.worker.speed = axis.speed  # applied when the stage connects
+            self._apply_axis(card, axis, refresh=False)
         self.presets.set_axes({c.worker.name: c.axis for c in self.cards})
         self._arrange(self.axes.order())
 
@@ -181,6 +215,15 @@ class MainWindow(QMainWindow):
                     log.warning("%s", error)
                     axis = replace(card.axis, travel=(info.lower, info.upper))
                 self._apply_axis(card, axis)
+            speed = card.worker.speed
+            if speed is not None and speed != card.axis.speed:
+                # The controller accepted a new speed: keep it for the next session.
+                try:
+                    self._apply_axis(card, self.axes.remember_speed(card.worker.name, speed))
+                except AxisError as error:
+                    log.warning("%s", error)
+                    card.axis = replace(card.axis, speed=speed)
+                self.say(f"{card.axis.label} speed set to {speed:g} {card.config.units}/s.")
             card.show_status(status)
         self._fit_cards()
         self.presets.show_statuses(statuses)
@@ -204,11 +247,16 @@ class MainWindow(QMainWindow):
         self.presets.set_order(order)
 
     def _fit_cards(self) -> None:
-        """Give the cards row the height of the tallest card.
+        """One width for every card, and the cards row as tall as the tallest card.
 
-        A card grows when a message wraps to more lines. The window layout does not
-        always take that change from the nested row, so the row height is set here.
+        The width is the widest that any card's controls need (at least CARD_WIDTH), so
+        no control is cut and the cards line up. A card grows taller when a message wraps
+        to more lines; the window layout does not always take that change from the nested
+        row, so the row height is set here.
         """
+        width = max((card.needed_width() for card in self.cards), default=theme.CARD_WIDTH)
+        for card in self.cards:
+            card.set_card_width(width)
         height = max((card.sizeHint().height() for card in self.cards), default=0)
         if height != self._card_height:
             self._card_height = height
