@@ -29,6 +29,7 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
+allowed-confusables = ["−"]  # the minus sign on the jog buttons, paired with +
 select = [
     "A",
     "ARG",

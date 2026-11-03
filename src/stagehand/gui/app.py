@@ -10,6 +10,7 @@ import logging
 import sys
 import tempfile
 from collections.abc import Sequence
+from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -17,8 +18,8 @@ from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -29,12 +30,13 @@ from PySide6.QtWidgets import (
 
 from stagehand import __version__
 from stagehand import config as config_module
+from stagehand.axes import Axis, AxisError, AxisStore
 from stagehand.config import AppConfig, ConfigError
 from stagehand.gui import theme
+from stagehand.gui.axis_dialog import AxisDialog
 from stagehand.gui.icons import icon
 from stagehand.gui.presets_panel import PresetsPanel
 from stagehand.gui.stage_card import StageCard
-from stagehand.labels import LabelError, LabelStore
 from stagehand.presets import PresetStore
 from stagehand.rig import driver_factory
 from stagehand.worker import StageWorker
@@ -64,7 +66,7 @@ class MainWindow(QMainWindow):
         workers: Sequence[StageWorker],
         store: PresetStore,
         *,
-        labels: LabelStore | None = None,
+        axes: AxisStore | None = None,
         demo: bool = False,
         settings: QSettings | None = None,
     ) -> None:
@@ -73,23 +75,22 @@ class MainWindow(QMainWindow):
         self.workers = list(workers)
         self.settings = settings or QSettings("ClarkLab", "stagehand")
         keys = [w.name for w in self.workers]
-        self.labels = labels or LabelStore(app_config.labels_path, keys)
-        for worker in self.workers:
-            worker.label = self.labels.label(worker.name)
+        self.axes = axes or AxisStore(app_config.axes_path, keys)
         self.setWindowTitle("stagehand" + (" (demo)" if demo else ""))
 
-        title = QLabel("stagehand")
-        title.setFont(theme.font(theme.TITLE_PX, bold=True))
-        subtitle = QLabel("Motorized stages")
-        subtitle.setObjectName("secondary")
-        demo_badge = QLabel("DEMO: simulated stages")
+        title = QLabel(
+            f"<span style='font-size:{theme.TITLE_PX}px; font-weight:700'>stagehand</span>"
+            f"&nbsp;&nbsp;<span style='color:{theme.INK_SOFT}'>motorized stages</span>"
+        )
+        title.setTextFormat(Qt.RichText)
+        demo_badge = QLabel("DEMO · simulated stages")
         demo_badge.setObjectName("demo")
         demo_badge.setVisible(demo)
         self.connect_all_button = QPushButton(icon("connect"), "Connect all")
         self.connect_all_button.clicked.connect(self.connect_all)
-        self.stop_all_button = QPushButton(icon("stop", theme.PANEL), "Stop all   Esc")
+        self.stop_all_button = QPushButton(icon("stop", theme.PANEL), "Stop all (Esc)")
         self.stop_all_button.setObjectName("stopAll")
-        self.stop_all_button.setToolTip("Stop every stage now (Esc).")
+        self.stop_all_button.setToolTip("Stop every stage now. Esc does the same from anywhere.")
         self.stop_all_button.clicked.connect(self.stop_all)
         QShortcut(
             QKeySequence(Qt.Key_Escape),
@@ -100,10 +101,9 @@ class MainWindow(QMainWindow):
 
         header = QHBoxLayout()
         header.setSpacing(theme.GAP)
-        header.addWidget(title)
-        header.addWidget(subtitle, 0, Qt.AlignBottom)
+        header.addWidget(title, 0, Qt.AlignVCenter)
         header.addSpacing(theme.UNIT)
-        header.addWidget(demo_badge)
+        header.addWidget(demo_badge, 0, Qt.AlignVCenter)
         header.addStretch(1)
         header.addWidget(self.connect_all_button)
         header.addWidget(self.stop_all_button)
@@ -113,28 +113,48 @@ class MainWindow(QMainWindow):
             for w in self.workers
         ]
         for card in self.cards:
-            card.rename_requested.connect(lambda c=card: self.rename_stage(c))
+            card.settings_requested.connect(lambda c=card: self.edit_stage(c))
             card.move_requested.connect(lambda offset, c=card: self.move_stage(c, offset))
-        self.cards_row = QHBoxLayout()
+        self.cards_box = QWidget()
+        self.cards_row = QHBoxLayout(self.cards_box)
+        self.cards_row.setContentsMargins(0, 0, 0, 0)
         self.cards_row.setSpacing(theme.SECTION_GAP)
 
+        # Status line: a permanent label, so the text keeps the window margin (a Qt
+        # temporary message is drawn against the edge). say() shows a message for a while.
+        self.status_label = QLabel()
+        self.status_label.setObjectName("secondary")
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().setContentsMargins(theme.MARGIN - 2, 0, theme.MARGIN, 4)
+        self.statusBar().addWidget(self.status_label, 1)
+        self._resting_message = ""
+        self._message_timer = QTimer(self)
+        self._message_timer.setSingleShot(True)
+        self._message_timer.timeout.connect(
+            lambda: self.status_label.setText(self._resting_message)
+        )
+
         self.presets = PresetsPanel(store, self.workers, confirm_moves=app_config.confirm_moves)
-        self.presets.message.connect(lambda text: self.statusBar().showMessage(text, 8000))
-        self._arrange(self.labels.order())
+        self.presets.message.connect(self.say)
+        for card in self.cards:
+            self._apply_axis(card, self.axes.get(card.worker.name), refresh=False)
+        self.presets.set_axes({c.worker.name: c.axis for c in self.cards})
+        self._arrange(self.axes.order())
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.UNIT)
         layout.setSpacing(theme.SECTION_GAP)
         layout.addLayout(header)
-        layout.addLayout(self.cards_row)
+        layout.addWidget(self.cards_box)
         layout.addWidget(self.presets, 1)
         self.setCentralWidget(central)
 
         where = app_config.presets_path if not demo else "a temporary file (demo)"
-        self.statusBar().showMessage(f"stagehand {__version__}. Presets: {where}")
-        if self.labels.load_error:
-            self.statusBar().showMessage(self.labels.load_error)
+        self._resting_message = f"stagehand {__version__}  ·  presets: {where}"
+        self.status_label.setText(self._resting_message)
+        if self.axes.load_error:
+            self.say(self.axes.load_error, 60000)
         geometry = self.settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -142,6 +162,7 @@ class MainWindow(QMainWindow):
             width = len(self.cards) * (theme.CARD_WIDTH + theme.SECTION_GAP) + 2 * theme.MARGIN
             self.resize(max(width, 760), 820)
 
+        self._card_height = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(REFRESH_MS)
@@ -150,7 +171,18 @@ class MainWindow(QMainWindow):
     def refresh(self) -> None:
         statuses = {w.name: w.status for w in self.workers}
         for card in self.cards:
-            card.show_status(statuses[card.worker.name])
+            status = statuses[card.worker.name]
+            info = status.info
+            if info is not None and card.axis.travel != (info.lower, info.upper):
+                # Keep the travel, so a reversed stage shows correct numbers while offline.
+                try:
+                    axis = self.axes.remember_travel(card.worker.name, info.lower, info.upper)
+                except AxisError as error:
+                    log.warning("%s", error)
+                    axis = replace(card.axis, travel=(info.lower, info.upper))
+                self._apply_axis(card, axis)
+            card.show_status(status)
+        self._fit_cards()
         self.presets.show_statuses(statuses)
         live = any(s.state.busy for s in statuses.values())
         if self.stop_all_button.property("live") != live:
@@ -171,33 +203,70 @@ class MainWindow(QMainWindow):
         self.cards_row.addStretch(1)
         self.presets.set_order(order)
 
-    def rename_stage(self, card: StageCard) -> None:
+    def _fit_cards(self) -> None:
+        """Give the cards row the height of the tallest card.
+
+        A card grows when a message wraps to more lines. The window layout does not
+        always take that change from the nested row, so the row height is set here.
+        """
+        height = max((card.sizeHint().height() for card in self.cards), default=0)
+        if height != self._card_height:
+            self._card_height = height
+            self.cards_box.setFixedHeight(height)
+
+    def say(self, text: str, milliseconds: int = 8000) -> None:
+        """Show a message in the status line, then go back to the resting text."""
+        self.status_label.setText(text)
+        self._message_timer.start(milliseconds)
+
+    def _apply_axis(self, card: StageCard, axis: Axis, *, refresh: bool = True) -> None:
+        """Give a stage's name and direction to its worker (messages), card, and presets."""
         worker = card.worker
-        text, ok = QInputDialog.getText(
-            self,
-            "Rename stage",
-            f"Name for the stage on {worker.config.address} ({worker.name} in stages.toml).\n"
-            "For example X, Y, Z, or Odor port. Leave it empty to use the stages.toml name.",
-            text=worker.label,
-        )
-        if not ok:
+        worker.label = axis.label
+        worker.display = axis.to_display
+        card.set_axis(axis)
+        if refresh:
+            self.presets.set_axes({c.worker.name: c.axis for c in self.cards})
+
+    def edit_stage(self, card: StageCard) -> None:
+        """Name a stage, give it direction words, and reverse it if + moves it the wrong way."""
+        worker = card.worker
+        dialog = self.make_axis_dialog(card)
+        if dialog.exec() != QDialog.Accepted:
             return
         try:
-            label = self.labels.set_label(worker.name, text)
-        except LabelError as error:
-            QMessageBox.warning(self, "Rename stage", str(error))
+            axis = self.axes.update(
+                worker.name,
+                label=dialog.name(),
+                direction=dialog.direction(),
+                reversed=dialog.reversed(),
+            )
+        except AxisError as error:
+            QMessageBox.warning(self, "Stage name and direction", str(error))
             return
-        old, worker.label = worker.label, label
-        card.set_label(label)
-        self.presets.refresh()
-        log.info("stage %s renamed from %r to %r", worker.name, old, label)
-        self.statusBar().showMessage(f"{worker.config.address} is now called {label}.", 8000)
+        old = card.axis
+        self._apply_axis(card, axis)
+        log.info(
+            "stage %s: name %r -> %r, direction %s -> %s, reversed %s -> %s",
+            worker.name,
+            old.label,
+            axis.label,
+            old.direction,
+            axis.direction,
+            old.reversed,
+            axis.reversed,
+        )
+        self.say(f"Saved the name and direction of {axis.label}.")
+
+    def make_axis_dialog(self, card: StageCard) -> AxisDialog:
+        """Separate, so the tests can fill the dialog without showing it."""
+        return AxisDialog(card.worker.name, card.config.address, card.axis, self)
 
     def move_stage(self, card: StageCard, offset: int) -> None:
         try:
-            order = self.labels.move(card.worker.name, offset)
-        except LabelError as error:
-            QMessageBox.warning(self, "Move stage", str(error))
+            order = self.axes.move(card.worker.name, offset)
+        except AxisError as error:
+            QMessageBox.warning(self, "Move card", str(error))
             return
         self._arrange(order)
 
@@ -209,7 +278,7 @@ class MainWindow(QMainWindow):
     def stop_all(self) -> None:
         for worker in self.workers:
             worker.stop()
-        self.statusBar().showMessage("Stop sent to every stage.", 5000)
+        self.say("Stop sent to every stage.", 5000)
         log.info("stop all")
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -271,11 +340,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.demo:
         presets_path = Path(tempfile.gettempdir()) / "stagehand-demo-presets.json"
-        labels_path = Path(tempfile.gettempdir()) / "stagehand-demo-labels.json"
+        axes_path = Path(tempfile.gettempdir()) / "stagehand-demo-axes.json"
         setup_logging(None)
     else:
         presets_path = app_config.presets_path
-        labels_path = app_config.labels_path
+        axes_path = app_config.axes_path
         setup_logging(app_config.source.parent if app_config.source else None)
     log.info("start%s with %s", " (demo)" if args.demo else "", ", ".join(app_config.stage_names))
 
@@ -284,8 +353,8 @@ def main(argv: list[str] | None = None) -> int:
     for worker in workers:
         worker.start()
     store = PresetStore(presets_path)
-    labels = LabelStore(labels_path, app_config.stage_names)
-    window = MainWindow(app_config, workers, store, labels=labels, demo=args.demo)
+    axes = AxisStore(axes_path, app_config.stage_names)
+    window = MainWindow(app_config, workers, store, axes=axes, demo=args.demo)
     window.show()
     if app_config.connect_on_start:
         window.connect_all()

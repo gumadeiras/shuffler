@@ -9,14 +9,14 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from stagehand import config
+from stagehand.axes import AxisStore
 from stagehand.fakes import FakeStage
 from stagehand.gui import theme
 from stagehand.gui.app import MainWindow
 from stagehand.gui.presets_panel import GoToPresetDialog, SavePresetDialog, at_preset
-from stagehand.labels import LabelStore
 from stagehand.presets import PresetStore
 from stagehand.stage import State
 from stagehand.worker import StageWorker
@@ -31,6 +31,25 @@ class Clock:
 
     def __call__(self) -> float:
         return self.now
+
+
+class FilledAxisDialog:
+    """Stands in for AxisDialog: returns the given answers without showing anything."""
+
+    def __init__(self, name: str, direction: str = "none", reversed: bool = False) -> None:  # noqa: A002
+        self._answers = (name, direction, reversed)
+
+    def exec(self) -> int:
+        return QDialog.Accepted
+
+    def name(self) -> str:
+        return self._answers[0]
+
+    def direction(self) -> str:
+        return self._answers[1]
+
+    def reversed(self) -> bool:
+        return self._answers[2]
 
 
 class WindowTest(unittest.TestCase):
@@ -53,11 +72,15 @@ class WindowTest(unittest.TestCase):
             "Z": FakeStage("SN 28253849", upper=100.0, start=50.0, velocity=50.0, clock=self.clock),
         }
         self.workers = [
-            StageWorker(stage, lambda c: self.fakes[c.name]) for stage in self.app_config.stages
+            StageWorker(stage, lambda c: self.fakes[c.name], clock=self.clock)
+            for stage in self.app_config.stages
         ]
         self.store = PresetStore(folder / "presets.json")
-        settings = QSettings(str(folder / "ui.ini"), QSettings.IniFormat)
-        self.window = MainWindow(self.app_config, self.workers, self.store, settings=settings)
+        self.window = self.new_window(self.workers, "ui.ini")
+
+    def new_window(self, workers: list[StageWorker], ini: str) -> MainWindow:
+        settings = QSettings(str(Path(self.folder.name) / ini), QSettings.IniFormat)
+        return MainWindow(self.app_config, workers, self.store, settings=settings)
 
     def tearDown(self) -> None:
         self.window.timer.stop()
@@ -75,26 +98,42 @@ class WindowTest(unittest.TestCase):
         self.clock.now += 10.0
         self.run_all()
 
+    def ready(self) -> None:
+        self.window.connect_all()
+        for worker in self.workers:
+            worker.home()
+        self.run_all()
+        self.settle()
+
     def card(self, name: str):
         return next(c for c in self.window.cards if c.worker.name == name)
+
+    def edit(self, key: str, name: str, direction: str = "none", reversed: bool = False) -> None:  # noqa: A002
+        answers = FilledAxisDialog(name, direction, reversed)
+        with mock.patch.object(self.window, "make_axis_dialog", return_value=answers):
+            self.card(key).name_label.double_clicked.emit()
+
+    # -- cards ------------------------------------------------------------------------------
 
     def test_offline_cards_offer_connect_only(self) -> None:
         card = self.card("X")
         self.assertEqual(card.pill.text(), "Offline")
+        self.assertEqual(card.detail_label.text(), "Not connected.")
         self.assertFalse(card.go_button.isEnabled())
         self.assertFalse(card.connect_button.isHidden())
         self.assertTrue(card.home_button.isHidden())
+        self.assertTrue(card.unit_label.isHidden(), "no unit next to an unknown position")
 
     def test_not_homed_card_points_to_home(self) -> None:
         self.window.connect_all()
         self.run_all()
         card = self.card("X")
         self.assertEqual(card.pill.text(), "Not homed")
+        self.assertEqual(card.detail_label.text(), "Home this stage before you move it.")
         self.assertFalse(card.go_button.isEnabled())
         self.assertTrue(card.home_button.isEnabled())
         self.assertEqual(card.home_button.objectName(), "primary")
         self.assertEqual(card.position_label.text(), "12.5000")
-        self.assertEqual(card.target_box.value(), 12.5)
 
     def test_home_then_go_from_the_card(self) -> None:
         self.window.connect_all()
@@ -105,14 +144,36 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(card.pill.text(), "Homing")
         self.settle()
         self.assertEqual(card.pill.text(), "Ready")
-        self.assertEqual(card.target_box.maximum(), 20.0, "the configured max narrows the box")
+        self.assertEqual(card.target_box.text(), "0.0000", "the field starts at the position")
+        self.assertEqual(card.target_box.maximum(), 20.0, "the configured max narrows the range")
         card.target_box.setValue(7.25)
         card.go_button.click()
         self.run_all()
         self.assertTrue(self.window.stop_all_button.property("live"))
+        self.assertEqual(card.detail_label.text(), "Moving to 7.2500 mm")
         self.settle()
         self.assertEqual(card.position_label.text(), "7.2500")
         self.assertFalse(self.window.stop_all_button.property("live"))
+
+    def test_target_field_follows_the_stage_after_a_jog(self) -> None:
+        self.ready()
+        card = self.card("X")
+        card.forward_button.click()  # 0.1 mm, the default step
+        self.run_all()
+        self.settle()
+        self.assertEqual(card.target_box.text(), "0.1000")
+
+    def test_target_field_is_visible_and_out_of_range_targets_are_refused(self) -> None:
+        self.window.show()
+        APP.processEvents()
+        self.ready()
+        card = self.card("X")
+        self.assertGreater(card.target_box.width(), 100, "the field must not collapse")
+        card.target_box.setText("22.5")  # max is 20 in this config
+        card.target_box.returnPressed.emit()
+        self.run_all()
+        self.assertIn("outside the allowed range", self.workers[0].status.error)
+        self.assertNotIn("move_to 22.5", self.fakes["X"].commands)
 
     def test_stop_all_reaches_every_stage(self) -> None:
         self.window.connect_all()
@@ -122,15 +183,13 @@ class WindowTest(unittest.TestCase):
         for fake in self.fakes.values():
             self.assertIn("stop", fake.commands)
 
+    # -- presets ----------------------------------------------------------------------------
+
     def test_presets_save_match_and_go(self) -> None:
-        self.window.connect_all()
-        for card in self.window.cards:
-            card.worker.home()
-        self.run_all()
-        self.settle()
+        self.ready()
         statuses = {w.name: w.status for w in self.workers}
 
-        dialog = SavePresetDialog(list(statuses.values()), {"X": 4, "Z": 4}, self.window)
+        dialog = SavePresetDialog(list(statuses.values()), self.window)
         dialog.name_edit.setText("Rest")
         self.assertEqual(dialog.positions(), {"X": 0.0, "Z": 0.0})
         self.store.save(dialog.name(), dialog.positions())
@@ -138,7 +197,7 @@ class WindowTest(unittest.TestCase):
         self.assertTrue(at_preset(self.store.get("Rest"), statuses))
 
         self.store.save("Far", {"X": 30.0, "Z": 60.0})  # X is outside its configured max
-        go = GoToPresetDialog(self.store.get("Far"), statuses, {"X": 4, "Z": 4}, self.window)
+        go = GoToPresetDialog(self.store.get("Far"), statuses, self.window)
         self.assertEqual(go.targets(), {"Z": 60.0})
         self.assertFalse(go.checks["X"].isEnabled())
 
@@ -152,70 +211,102 @@ class WindowTest(unittest.TestCase):
     def test_saving_skips_stages_that_are_not_homed(self) -> None:
         self.window.connect_all()
         self.run_all()
-        statuses = [w.status for w in self.workers]
-        dialog = SavePresetDialog(statuses, {"X": 4, "Z": 4}, self.window)
+        dialog = SavePresetDialog([w.status for w in self.workers], self.window)
         self.assertEqual(dialog.positions(), {})
         self.assertFalse(dialog.checks["X"].isEnabled())
 
-    def test_target_field_is_visible_and_out_of_range_targets_are_refused(self) -> None:
-        self.window.show()
-        APP.processEvents()
-        self.window.connect_all()
-        for worker in self.workers:
-            worker.home()
-        self.run_all()
-        self.settle()
-        card = self.card("X")
-        self.assertGreater(card.target_box.width(), 100, "the field must not collapse")
-        self.assertEqual(card.target_box.text(), "12.5000")
-        card.target_box.setText("22.5")  # max is 20 in this config
-        card.target_box.returnPressed.emit()
-        self.run_all()
-        self.assertIn("outside the allowed range", self.workers[0].status.error)
-        self.assertNotIn("move_to 22.5", self.fakes["X"].commands)
+    # -- names, directions, order -----------------------------------------------------------
 
-    def rename(self, key: str, text: str) -> None:
-        card = self.card(key)
-        with mock.patch.object(QInputDialog, "getText", return_value=(text, True)):
-            card.name_label.double_clicked.emit()
-
-    def test_rename_a_stage_in_the_window(self) -> None:
+    def test_name_a_stage_in_the_window(self) -> None:
         self.store.save("Rest", {"X": 1.0, "Z": 2.0})
         self.window.presets.refresh()
-        self.rename("Z", "Odor Z")
+        self.edit("Z", "Odor Z")
         card = self.card("Z")
         self.assertEqual(card.name_label.text(), "Odor Z")
-        self.assertIn("SN 28253849 · Z", card.model_label.text(), "the toml name stays visible")
+        self.assertIn("SN 28253849  ·  Z", card.model_label.text(), "the toml name stays visible")
         self.assertEqual(self.workers[1].label, "Odor Z")
-        header = self.window.presets.table.horizontalHeaderItem(2).text()
-        self.assertEqual(header, "Odor Z")
+        self.assertEqual(self.window.presets.table.horizontalHeaderItem(2).text(), "Odor Z")
         self.assertEqual(self.store.get("Rest").positions, {"X": 1.0, "Z": 2.0}, "keys unchanged")
 
-        # Persisted: a new window over the same files shows the new label.
         self.window.timer.stop()
-        again = MainWindow(
-            self.app_config,
-            [StageWorker(s, lambda c: self.fakes[c.name]) for s in self.app_config.stages],
-            self.store,
-            settings=QSettings(str(Path(self.folder.name) / "ui2.ini"), QSettings.IniFormat),
-        )
+        workers = [StageWorker(s, lambda c: self.fakes[c.name]) for s in self.app_config.stages]
+        again = self.new_window(workers, "ui2.ini")
         self.assertEqual(
             next(c for c in again.cards if c.worker.name == "Z").name_label.text(), "Odor Z"
         )
         again.timer.stop()
 
-    def test_worker_messages_use_the_label(self) -> None:
-        self.rename("X", "Odor X")
+    def test_worker_messages_use_the_name(self) -> None:
+        self.edit("X", "Odor X")
         self.workers[0].move_to(1.0)
         self.run_all()
         self.assertIn("Odor X is", self.workers[0].status.error)
 
-    def test_duplicate_label_is_refused(self) -> None:
-        self.rename("X", "Same")
+    def test_duplicate_name_is_refused(self) -> None:
+        self.edit("X", "Same")
         with mock.patch.object(QMessageBox, "warning") as warning:
-            self.rename("Z", "same")
+            self.edit("Z", "same")
         warning.assert_called_once()
         self.assertEqual(self.card("Z").name_label.text(), "Z")
+
+    def test_direction_words_label_the_controls(self) -> None:
+        self.ready()
+        self.edit("X", "X", "back-forward")
+        card = self.card("X")
+        self.assertEqual(card.back_button.text(), "back")
+        self.assertEqual(card.forward_button.text(), "forward")
+        self.assertIn("back", card.low_label.text())
+        self.assertIn("forward", card.high_label.text())
+
+    def test_reversed_stage_makes_plus_forward(self) -> None:
+        """X on 0..25 (max 20 in config). Reversed, + moves the controller down."""
+        self.ready()
+        self.fakes["X"].move_to(5.0)  # put the stage at controller 5
+        self.settle()
+        self.edit("X", "X", "back-forward", reversed=True)
+        card = self.card("X")
+        self.assertEqual(card.position_label.text(), "20.0000", "25 - 5")
+        self.assertIn("reversed", card.model_label.text())
+        self.assertEqual(card.target_box.text(), "20.0000")
+        self.assertEqual((card.target_box.minimum(), card.target_box.maximum()), (5.0, 25.0))
+
+        card.forward_button.click()  # + forward: display 20.1, controller 4.9
+        self.run_all()
+        self.settle()
+        self.assertEqual(self.workers[0].status.position, 4.9)
+        self.assertEqual(card.position_label.text(), "20.1000")
+
+        card.target_box.setText("24")  # display 24 -> controller 1
+        card.go_button.click()
+        self.run_all()
+        self.settle()
+        self.assertEqual(self.workers[0].status.position, 1.0)
+
+        card.target_box.setText("2")  # display 2 -> controller 23, beyond max 20
+        card.go_button.click()
+        self.run_all()
+        error = self.workers[0].status.error
+        self.assertIn("2.0000 mm is outside the allowed range 5.0000 to 25.0000", error)
+
+    def test_reversed_stage_shows_mirrored_presets(self) -> None:
+        self.ready()
+        self.edit("X", "X", reversed=True)
+        self.store.save("P", {"X": 5.0})
+        self.window.presets.refresh(select="P")
+        self.assertEqual(self.window.presets.table.item(0, 1).text(), "20.0000")
+        self.assertEqual(self.store.get("P").positions, {"X": 5.0}, "stored in controller units")
+        go = GoToPresetDialog(
+            self.store.get("P"),
+            {w.name: w.status for w in self.workers},
+            self.window,
+            self.window.presets.views(),
+        )
+        self.assertEqual(go.targets(), {"X": 5.0})
+
+    def test_reverse_waits_for_the_travel(self) -> None:
+        with mock.patch.object(QMessageBox, "warning") as warning:
+            self.edit("X", "X", reversed=True)  # never connected: travel unknown
+        warning.assert_called_once()
 
     def test_move_cards_and_preset_columns(self) -> None:
         self.card("Z").move_requested.emit(-1)
@@ -223,8 +314,8 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.presets.table.horizontalHeaderItem(1).text(), "Z")
         self.assertFalse(self.card("Z").left_action.isEnabled())
         self.assertTrue(self.card("Z").right_action.isEnabled())
-        labels = LabelStore(self.app_config.labels_path, self.app_config.stage_names)
-        self.assertEqual(labels.order(), ["Z", "X"])
+        axes = AxisStore(self.app_config.axes_path, self.app_config.stage_names)
+        self.assertEqual(axes.order(), ["Z", "X"])
 
 
 class ThemeTest(unittest.TestCase):
@@ -235,6 +326,21 @@ class ThemeTest(unittest.TestCase):
 
     def test_every_state_has_a_pill(self) -> None:
         self.assertEqual(set(theme.PILL), set(State))
+
+    def test_numbers_use_a_monospace_font(self) -> None:
+        """A named monospace font where one is installed; the system fixed font otherwise.
+
+        The offscreen test platform has no Windows fonts, so check what is asked for.
+        """
+        from PySide6.QtGui import QFont, QFontDatabase
+
+        number = theme.number_font()
+        if any(QFontDatabase.hasFamily(f) for f in theme.MONOSPACE):
+            self.assertIn(number.family(), theme.MONOSPACE)
+            self.assertEqual(number.styleHint(), QFont.Monospace)
+        else:
+            fixed = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+            self.assertEqual(number.family(), fixed.family())
 
 
 if __name__ == "__main__":

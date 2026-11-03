@@ -69,6 +69,9 @@ class StageWorker:
         self.config = config
         # What messages call the stage. The window sets it; one assignment, so no lock.
         self.label = config.name
+        # Controller coordinate -> the number the window shows (a reversed axis mirrors it).
+        # Used only in messages; the window sets it.
+        self.display: Callable[[float], float] = lambda value: value
         self._make_driver = make_driver
         self._poll_s = poll_s
         self._clock = clock
@@ -236,14 +239,20 @@ class StageWorker:
         low, high = allowed
         if not low - TOLERANCE <= target <= high + TOLERANCE:
             units = self.config.units
+            shown_low, shown_high = sorted((self.display(low), self.display(high)))
             raise DeviceError(
-                f"{self.label}: {self._fmt(target)} {units} is outside the allowed range "
-                f"{self._fmt(low)} to {self._fmt(high)} {units}."
+                f"{self.label}: {self._fmt(self.display(target))} {units} is outside the "
+                f"allowed range {self._fmt(shown_low)} to {self._fmt(shown_high)} {units}."
             )
         target = min(max(target, low), high)
         driver.move_to(target)
         self._hold(State.MOVING, target)
-        log.info("%s: move to %s", self._who, self._fmt(target))
+        log.info(
+            "%s: move to %s (controller %s)",
+            self._who,
+            self._fmt(self.display(target)),
+            self._fmt(target),
+        )
 
     def _do_move_by(self, delta: float) -> None:
         self._ready_driver()

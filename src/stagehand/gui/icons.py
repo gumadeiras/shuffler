@@ -61,7 +61,8 @@ def blank() -> QIcon:
 
 @cache
 def icon(name: str, color: str = theme.NAVY) -> QIcon:
-    """The icon for a command name: ``color`` when enabled, grey when disabled.
+    """The icon for a command name: ``color`` when enabled, grey when disabled, and white
+    in a selected (navy) table row.
 
     A control drawn on navy or pink asks for a white icon.
     """
@@ -70,4 +71,5 @@ def icon(name: str, color: str = theme.NAVY) -> QIcon:
         for ratio in (1, 2):
             result.addPixmap(_render(name, color, size, ratio), QIcon.Normal)
             result.addPixmap(_render(name, theme.DISABLED, size, ratio), QIcon.Disabled)
+            result.addPixmap(_render(name, theme.PANEL, size, ratio), QIcon.Selected)
     return result

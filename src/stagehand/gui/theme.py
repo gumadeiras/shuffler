@@ -25,7 +25,7 @@ PINK_WASH = "#fbe1ea"
 SURFACE = "#fbf5e8"
 PANEL = "#ffffff"
 INK_SOFT = "#4f5f7a"
-DISABLED = "#76819a"
+DISABLED = "#5f6b85"  # darkened from sniffler's #76819a so disabled labels stay readable
 LINE = "#d9d0bf"
 GOLD = "#8a5f10"
 # Additions for stagehand, derived from the same colors.
@@ -40,13 +40,15 @@ SECTION_GAP = 2 * UNIT
 MARGIN = 2 * UNIT
 
 BODY_PX = 13
-SMALL_PX = 11
+SMALL_PX = 12
 TITLE_PX = 18
 DISPLAY_PX = 34
 
 ICON_PX = 18
 CARD_WIDTH = 300
 CHECK_MARK = (ASSETS / "icons" / "check-white.svg").as_posix()
+CHEVRON = (ASSETS / "icons" / "chevron-down-navy.svg").as_posix()
+CHEVRON_DISABLED = (ASSETS / "icons" / "chevron-down-disabled.svg").as_posix()
 
 # (text, background, border) for the state pill.
 PILL: dict[State, tuple[str, str, str]] = {
@@ -70,6 +72,12 @@ TEXT_PAIRS = {
     "live Stop button text": (PANEL, PINK_FILL),
     "demo badge": (PANEL, GOLD),
     "error text on panel": (PINK_TEXT, PANEL),
+    "secondary on window": (INK_SOFT, SURFACE),
+    "disabled text on window": (DISABLED, SURFACE),
+    "disabled text on panel": (DISABLED, PANEL),
+    "table text on striped row": (NAVY, SURFACE),
+    "table secondary on striped row": (INK_SOFT, SURFACE),
+    "direction word on panel": (GOLD, PANEL),
     **{f"pill {state.value}": (fg, bg) for state, (fg, bg, _) in PILL.items()},
 }
 
@@ -98,9 +106,21 @@ def font(size_px: int = BODY_PX, *, bold: bool = False) -> QFont:
     return result
 
 
+MONOSPACE = ("Cascadia Mono", "Consolas")  # the first one installed wins
+
+
 def number_font(size_px: int = DISPLAY_PX) -> QFont:
-    """Fixed-width digits, so a readout does not jitter while the stage moves."""
-    result = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    """A monospace font for numbers, so a readout does not jitter while the stage moves.
+
+    The generic system fixed font on Windows is Courier New, which is thin and hard to
+    read, so a modern monospace is chosen by name first.
+    """
+    family = next((f for f in MONOSPACE if QFontDatabase.hasFamily(f)), None)
+    if family is None:
+        result = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    else:
+        result = QFont(family)
+        result.setStyleHint(QFont.Monospace)
     result.setPixelSize(size_px)
     return result
 
@@ -156,18 +176,32 @@ QPushButton#stop[live="true"] {{ background: {PINK_FILL}; color: {PANEL};
 QPushButton#stopAll {{ font-weight: bold; padding: 8px 18px; background: {NAVY}; color: {PANEL};
     border-color: {NAVY}; }}
 QPushButton#stopAll[live="true"] {{ background: {PINK_FILL}; border-color: {PINK_FILL}; }}
-QDoubleSpinBox, QComboBox, QLineEdit {{ border: 1px solid {LINE}; border-radius: 6px;
-    padding: 4px 6px; background: {PANEL}; }}
-QDoubleSpinBox:focus, QComboBox:focus, QLineEdit:focus {{ border-color: {NAVY}; }}
+QComboBox, QLineEdit {{ border: 1px solid {LINE}; border-radius: 6px;
+    padding: 4px 8px; background: {PANEL}; color: {NAVY}; }}
+QComboBox:focus, QLineEdit:focus {{ border-color: {NAVY}; }}
+QComboBox:disabled, QLineEdit:disabled {{ background: {SURFACE}; color: {DISABLED}; }}
+QComboBox::drop-down {{ border: 0; width: 24px; }}
+QComboBox::down-arrow {{ image: url({CHEVRON}); width: 14px; height: 14px; }}
+QComboBox::down-arrow:disabled {{ image: url({CHEVRON_DISABLED}); }}
+QComboBox QAbstractItemView {{ border: 1px solid {LINE}; background: {PANEL};
+    selection-background-color: {NAVY}; selection-color: {PANEL}; outline: 0; }}
 QHeaderView::section {{ background: {SURFACE}; color: {INK_SOFT}; border: 0;
-    border-bottom: 1px solid {LINE}; padding: 6px 8px; font-weight: bold; }}
+    border-bottom: 1px solid {LINE}; padding: 6px 10px; font-weight: bold; }}
 QTableWidget {{ border: 0; gridline-color: {LINE}; background: {PANEL};
+    alternate-background-color: {SURFACE};
     selection-background-color: {NAVY}; selection-color: {PANEL}; }}
+QTableWidget::item {{ padding: 0 10px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid {NAVY}; border-radius: 3px;
     background: {PANEL}; }}
 QCheckBox::indicator:checked {{ background: {NAVY}; image: url({CHECK_MARK}); }}
 QCheckBox::indicator:disabled {{ border-color: {DISABLED}; }}
-QStatusBar {{ color: {INK_SOFT}; }}
+QStatusBar {{ color: {INK_SOFT}; padding-left: {MARGIN}px; }}
+QStatusBar QLabel {{ color: {INK_SOFT}; }}
+QMenu {{ background: {PANEL}; border: 1px solid {LINE}; padding: 4px; }}
+QMenu::item {{ padding: 6px 18px 6px 10px; color: {NAVY}; border-radius: 4px; }}
+QMenu::item:selected {{ background: {NAVY_WASH}; }}
+QMenu::item:disabled {{ color: {DISABLED}; }}
+QMenu::separator {{ height: 1px; background: {LINE}; margin: 4px 6px; }}
 """
 
 

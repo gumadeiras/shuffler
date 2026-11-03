@@ -21,12 +21,23 @@ palette, Fusion style, and icon set.
 | CONEX B | Newport CONEX-CC | COM4 | read on connect |
 | DDS100 | Thorlabs KBD101 K-Cube | USB, serial 28253849 | DDS100 (100 mm direct drive) |
 
-To say which stage is which axis, rename it in the window: double-click its title
-(or use **⋯ → Rename…**) and type "X", "Odor Z", and so on. Use **⋯ → Move left /
-Move right** to put the cards in order. The labels and order are kept in
-`labels.json` and come back the next time the window opens. The card subtitle still
-shows the port and the `stages.toml` name, so the mapping stays visible. Presets
-store positions under the `stages.toml` name, so relabeling never breaks a preset.
+### Name each axis and make + mean forward, up, or right
+
+Double-click a stage title (or use **⋯ → Name and direction…**):
+
+- **Name**: "X", "Odor Z", and so on.
+- **Direction**: left / right, down / up, back / forward, or out / in. The words
+  appear on the − and + buttons and at the ends of the travel bar. + is always the
+  second word: right, up, forward, or in.
+- **Reverse this stage**: press + and watch the stage. If it moves the wrong way
+  (back instead of forward), check Reverse. Then + moves it forward, and the position
+  counts from the other end of the travel, so a larger number is always further
+  forward. Only the display changes; the controller and the presets keep the
+  controller's own coordinates, so reversing never changes what a preset does.
+
+Use **⋯ → Move card left / right** to put the cards in order. These settings are kept
+in `axes.json` and come back the next time the window opens. The card subtitle still
+shows the port, the `stages.toml` name, and "reversed", so the mapping stays visible.
 
 ## Set up (once)
 
@@ -97,11 +108,12 @@ A log of every command is written to `stagehand.log` next to `stages.toml`.
 |---|---|
 | `stages.toml` | this rig's stages (git-ignored; start from `stages.toml.example`) |
 | `presets.json` | saved positions (git-ignored; rewritten atomically) |
-| `labels.json` | stage labels and card order, set in the window (git-ignored) |
+| `axes.json` | stage names, directions, Reverse, and card order, set in the window (git-ignored) |
 | `src/stagehand/conex.py` | Newport CONEX-CC ASCII protocol (pyserial) |
 | `src/stagehand/kinesis.py` | Thorlabs K-Cubes (KBD101, KDC101, KST101) via Kinesis .NET |
 | `src/stagehand/worker.py` | one thread per stage; all motion rules |
 | `src/stagehand/presets.py` | preset storage |
+| `src/stagehand/axes.py` | names, directions, and the Reverse mirror |
 | `src/stagehand/gui/` | the window |
 | `src/stagehand/fakes.py` | simulated stage for `--demo` and the tests |
 
