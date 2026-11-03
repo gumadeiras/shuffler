@@ -107,12 +107,10 @@ class KinesisStage:
         *,
         kinesis_dir: Path,
         units: str = "mm",
-        velocity: float | None = None,
     ) -> None:
         self.serial = serial
         self._dir = kinesis_dir
         self._units = units
-        self._velocity = velocity
         self._device: Any = None
         family = FAMILIES.get(serial[:2])
         if family is None:
@@ -182,9 +180,7 @@ class KinesisStage:
             if not read_only:
                 device.EnableDevice()
                 time.sleep(0.25)
-                if self._velocity is not None:
-                    params = device.GetVelocityParams()
-                    device.SetVelocityParams(to_decimal(self._velocity), params.Acceleration)
+            # No speed is set here: the worker sets it, after its checks, once READY.
             info = device.GetDeviceInfo()
             limits = device.AdvancedMotorLimits
             lower = to_float(limits.LengthMinimum)
@@ -281,7 +277,6 @@ class KinesisStage:
             device.SetVelocityParams(to_decimal(velocity), acceleration)
 
         self._call("the speed", apply)
-        self._velocity = velocity
 
     def reset(self) -> None:
         def reset(device: Any) -> None:

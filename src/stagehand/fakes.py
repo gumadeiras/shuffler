@@ -1,4 +1,10 @@
-"""A simulated stage for demo mode and the tests. It moves on the clock, not on hardware."""
+"""A simulated stage for demo mode and the tests. It moves on the clock, not on hardware.
+
+``conex=True`` adds the CONEX-CC rules that matter to the app (CONEX-CC manual):
+the speed (VA) can be read or set only when the stage is READY; the speed stored in
+the controller is also the highest it accepts; and a reset (also the one before a
+home search of a homed stage) restores the stored speed.
+"""
 
 import time
 from collections.abc import Callable
@@ -18,6 +24,7 @@ class FakeStage:
         start: float | None = None,
         velocity: float = 5.0,
         max_velocity: float | None = None,
+        conex: bool = False,
         homed: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -26,7 +33,9 @@ class FakeStage:
         self.units = units
         self.lower, self.upper = lower, upper
         self.velocity = velocity
-        self.max_velocity = max_velocity
+        self.max_velocity = max_velocity  # reported to the app (Kinesis does this)
+        self.conex = conex
+        self.stored_velocity = velocity  # the CONEX configuration speed: the maximum too
         self.clock = clock
         self.commands: list[str] = []  # what was sent, for the tests
         self.fail_open: str | None = None
@@ -44,15 +53,18 @@ class FakeStage:
             raise DeviceError(self.fail_open)
         self.connected = True
         self.commands.append("open-read-only" if read_only else "open")
-        return StageInfo(
-            self.model, self.address, self.units, self.lower, self.upper, self.max_velocity
-        )
+        reported = None if self.conex else self.max_velocity
+        return StageInfo(self.model, self.address, self.units, self.lower, self.upper, reported)
 
     def get_velocity(self) -> float:
+        self._speed_allowed()
         return self.velocity
 
     def set_velocity(self, velocity: float) -> None:
         self.commands.append(f"set_velocity {velocity:g}")
+        self._speed_allowed()
+        if self.conex and velocity > self.stored_velocity:
+            raise DeviceError("Simulated CONEX-CC refused VA: parameter out of range.")
         if self.max_velocity is not None and velocity > self.max_velocity:
             raise DeviceError("Simulated stage refused the speed: above its maximum.")
         here = self._position()  # a move in progress keeps its place
@@ -66,21 +78,7 @@ class FakeStage:
     def read(self) -> Reading:
         if self.fail_read:
             raise DeviceError(self.fail_read)
-        position = self._position()
-        moving = position != self._target
-        if self._homing and not moving:
-            self._homing, self._homed = False, True
-        if self._homing:
-            state = State.HOMING
-        elif moving:
-            state = State.MOVING
-        elif not self._enabled:
-            state = State.DISABLED
-        elif not self._homed:
-            state = State.NOT_HOMED
-        else:
-            state = State.READY
-        return Reading(position=round(position, 6), state=state)
+        return Reading(position=round(self._position(), 6), state=self._state())
 
     def move_to(self, position: float) -> None:
         self.commands.append(f"move_to {position:g}")
@@ -92,6 +90,8 @@ class FakeStage:
 
     def home(self) -> None:
         self.commands.append("home")
+        if self.conex and self._homed:
+            self.velocity = self.stored_velocity  # the reset before the home search
         self._homing, self._homed = True, False
         self._start(self.lower)
 
@@ -108,6 +108,26 @@ class FakeStage:
         self.stop()
         self._homed = False
         self._enabled = True
+        if self.conex:
+            self.velocity = self.stored_velocity
+
+    def _state(self) -> State:
+        moving = self._position() != self._target
+        if self._homing and not moving:
+            self._homing, self._homed = False, True
+        if self._homing:
+            return State.HOMING
+        if moving:
+            return State.MOVING
+        if not self._enabled:
+            return State.DISABLED
+        if not self._homed:
+            return State.NOT_HOMED
+        return State.READY
+
+    def _speed_allowed(self) -> None:
+        if self.conex and self._state() is not State.READY:
+            raise DeviceError("Simulated CONEX-CC refused VA: not allowed before homing.")
 
     def _start(self, target: float) -> None:
         self._origin = self._position()

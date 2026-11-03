@@ -71,12 +71,11 @@ uv run stagehand-gui --demo     # simulated stages; no hardware is touched
 3. Type a target and press **Enter** (or **Go**), or use **−** and **+** with a step
    size. Repeated jogs add up exactly (they continue from the last target). The bar
    under the position shows where the stage is in its travel; it is a readout only.
-4. **Speed** sets how fast moves and jogs go (mm/s). Type a value and press **Enter**
-   or **Set**. stagehand saves it and applies it again each time the stage connects
-   (the controllers forget it at power-off). It cannot change during a move, it must
-   be below the controller maximum when the controller reports one (the DDS100 does),
-   and a speed more than twice the current one asks first. Homing uses the
-   controller's own homing speed.
+4. **Speed** sets how fast moves and jogs go (mm/s), when the stage is homed and
+   still. Type a value and press **Enter** or **Set**. stagehand saves it and applies
+   it again each time the stage is ready after a connect, home, or reset (the
+   controllers forget it). A speed more than twice the current one asks first.
+   Homing uses the controller's own homing speed. See "Speed limits" below.
 5. **Presets → Save current…** stores the positions of the stages you pick. A pin
    marks the preset that the stages are at now. Double-click a preset to go to it:
    a dialog shows each move (now, target, change) and you can leave stages out.
@@ -96,10 +95,31 @@ uv run stagehand-gui --demo     # simulated stages; no hardware is touched
 - A Kinesis controller error blocks moves until you reset it.
 - Going to a preset moves the checked stages at the same time.
 - Closing the window while a stage moves asks first, then stops the stage.
+- Positions are checked twice: stagehand refuses a target outside the allowed range
+  (it never clamps one silently), and the controller refuses a target outside its own
+  limits (CONEX: SL/SR, error G; Kinesis: the stage travel). Presets are checked again
+  when you go to them.
 - stagehand never writes controller configuration (no CONEX configuration mode, no
-  home-type or stored-limit changes). The speed is a working value: the window sets
-  it, and an optional `velocity` in `stages.toml` sets a starting speed until one is
-  set in the window.
+  home-type, stored-limit, acceleration, or homing-speed changes). On a K-Cube it loads
+  the stage settings that Kinesis uses for it (DDS100) and enables the motor, as the
+  Kinesis application does. `stagehand probe` writes nothing.
+
+### Speed limits
+
+- Every speed (typed, saved, or `velocity` in `stages.toml`) must be more than 0 and
+  at most the ceiling: the controller's reported maximum (K-Cube) and `max_velocity`
+  in `stages.toml`, whichever is lower.
+- `max_velocity` is also enforced on the controller's own speed: when a stage is ready
+  and the controller runs faster (a speed left by another program, or a CONEX's
+  stored speed after a reset), stagehand lowers it before any move. Set it for the
+  DDS100; its controller allows 500 mm/s.
+- A CONEX-CC also refuses a speed above the maximum stored in its configuration
+  (manual, VA: error C). The CONEX does not report that maximum, so the first time you
+  ask for too much, the controller refuses it and the speed does not change.
+- A CONEX-CC accepts a speed only when homed and still (manual, VA: errors H and M),
+  so stagehand sends it only then. Every CONEX command reads the controller's error
+  register before and after it, so a refused command is reported as refused, and
+  only that one.
 
 ## Diagnostics (nothing moves)
 

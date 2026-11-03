@@ -297,16 +297,84 @@ class WorkerTest(unittest.TestCase):
         worker.move_to(20.0)
         worker.set_velocity(3.0)
         self.run_all(worker)
-        self.assertIn("still", worker.status.error, "no speed change during a move")
+        self.assertIn("moving", worker.status.error, "no speed change during a move")
         self.assertFalse(any(c.startswith("set_velocity") for c in stage.commands))
 
-    def test_saved_speed_is_applied_on_connect(self) -> None:
+    def test_configured_max_velocity_is_a_ceiling(self) -> None:
+        worker, stage = self.connected_and_homed(max_velocity=4.0)
+        worker.set_velocity(6.0)
+        self.run_all(worker)
+        self.assertIn("above the maximum of 4", worker.status.error)
+        self.assertNotIn("set_velocity 6", stage.commands)
+
+    def test_a_faster_controller_speed_is_lowered_to_the_ceiling(self) -> None:
+        """The controller starts at 10 (left by another program); max_velocity is 4. Moves
+        must not use 10: the worker lowers it as soon as the stage is READY."""
+        worker, stage = self.make(max_velocity=4.0)
+        worker.connect()
+        worker.home()
+        self.run_all(worker)
+        self.settle(worker)
+        self.assertEqual(stage.velocity, 4.0)
+        self.assertEqual(worker.status.velocity, 4.0)
+
+    def test_configured_velocity_obeys_the_ceiling_too(self) -> None:
+        worker, stage = self.make(velocity=3.0)
+        self.assertEqual(worker.speed, 3.0)
+        worker.connect()
+        worker.home()
+        self.run_all(worker)
+        self.settle(worker)
+        self.assertIn("set_velocity 3", stage.commands)
+        self.assertEqual(worker.status.velocity, 3.0)
+
+    def test_speed_needs_a_homed_still_stage(self) -> None:
+        worker, stage = self.make()
+        worker.connect()
+        worker.set_velocity(2.0)
+        self.run_all(worker)
+        self.assertIn("not homed", worker.status.error)
+        self.assertNotIn("set_velocity 2", stage.commands)
+
+    def test_saved_speed_waits_for_ready(self) -> None:
         worker, stage = self.make()
         worker.speed = 1.5
         worker.connect()
         self.run_all(worker)
+        self.assertNotIn("set_velocity 1.5", stage.commands, "not before homing")
+        worker.home()
+        self.run_all(worker)
+        self.settle(worker)
         self.assertIn("set_velocity 1.5", stage.commands)
         self.assertEqual(worker.status.velocity, 1.5)
+
+    def test_conex_rules_end_to_end(self) -> None:
+        """The CONEX-CC sequence from the manual: VA only in READY, a reset before the home
+        search restores the stored speed, and VA above the stored speed is refused."""
+        self.clock = Clock()
+        stage = FakeStage(
+            "COM9", upper=25.0, start=10.0, velocity=2.0, conex=True, clock=self.clock
+        )
+        worker = StageWorker(
+            StageConfig(name="X", driver="conex", port="COM9"), lambda _c: stage, clock=self.clock
+        )
+        worker.speed = 0.5  # saved in the window
+        worker.connect()
+        self.run_all(worker)
+        self.assertIsNone(worker.status.velocity, "VA? is not asked before homing")
+        self.assertEqual(worker.status.error, "", "nothing refused: no VA was sent")
+        worker.home()
+        self.run_all(worker)
+        self.settle(worker, 30)
+        self.assertEqual(stage.velocity, 0.5, "applied once READY")
+        worker.home()  # homed: the controller resets first, back to its stored 2.0
+        self.run_all(worker)
+        self.settle(worker, 30)
+        self.assertEqual(stage.velocity, 0.5, "applied again after the reset")
+        worker.set_velocity(3.0)  # above the stored maximum
+        self.run_all(worker)
+        self.assertIn("refused VA", worker.status.error)
+        self.assertEqual(stage.velocity, 0.5)
 
     def test_reset_requires_homing_again(self) -> None:
         worker, _ = self.connected_and_homed()

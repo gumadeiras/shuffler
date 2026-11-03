@@ -25,6 +25,9 @@ confirm_moves = true
 #   min, max   optional: a safe range inside the controller's travel. Moves outside
 #              it are refused. Use this to keep a stage clear of the objective.
 #   velocity   optional: a starting speed in units/s, until one is set in the window
+#   max_velocity  optional: the highest speed in units/s. stagehand never sends a
+#              higher speed, and lowers the controller's speed to it when it finds it
+#              higher. Recommended for the DDS100 (its controller allows 500 mm/s).
 #   jog_steps  optional: the step sizes offered for the - and + buttons
 #   decimals   optional: digits shown after the decimal point (default 4)
 
@@ -46,3 +49,4 @@ driver = "kinesis"
 serial = "28253849"
 jog_steps = [0.01, 0.1, 1.0, 10.0]
 # velocity = 10.0
+# max_velocity = 50.0

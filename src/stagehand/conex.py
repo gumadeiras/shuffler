@@ -115,7 +115,6 @@ class ConexStage:
         *,
         address: int = 1,
         units: str = "mm",
-        velocity: float | None = None,
         serial_factory: Callable[..., Any] = serial.Serial,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
@@ -123,12 +122,10 @@ class ConexStage:
         self.port = port
         self._prefix = str(address)
         self._units = units
-        self._velocity = velocity
         self._serial_factory = serial_factory
         self._sleep = sleep
         self._clock = clock
         self._serial: Any = None
-        self._read_only = False
         # The worker replaces this with its own event, so Stop can interrupt reset().
         self.abort = threading.Event()
 
@@ -158,17 +155,25 @@ class ConexStage:
                     f"{self.port} does not exist. Is the controller plugged in?"
                 ) from None
             raise DeviceError(f"Cannot open {self.port}: {text}") from None
-        self._read_only = read_only
+        # Nothing is written here: the speed is set by the worker once the stage is READY
+        # (VA is not allowed while NOT REFERENCED, which is the state after power-up).
+        del read_only
         try:
             self._serial.reset_input_buffer()
             version = self._query("VE")
             if "CONEX" not in version.upper():
                 raise DeviceError(f"The device on {self.port} is not a CONEX controller.")
-            stage = self._query("ID?")
+            self._clear_error()  # an error left by another program
+            try:
+                stage = self._query("ID?")  # descriptive only; may be refused before homing
+            except DeviceError:
+                stage = ""
+            self._clear_error()
+            # The software limits are needed. If the controller refuses them, the
+            # connection fails: no moves are possible without known limits.
             lower = self._query_number("SL?")
             upper = self._query_number("SR?")
-            self._query("TE")  # clear an error left by another program
-            self._apply_velocity()
+            self._clear_error()
         except Exception:
             self.close()
             raise
@@ -211,7 +216,11 @@ class ConexStage:
             self._query("TE")
 
     def reset(self) -> None:
-        """Reboot the controller. It comes back not referenced, at its stored velocity."""
+        """Reboot the controller. It comes back not referenced, at its stored velocity.
+
+        The speed set in the window is lost; the worker sets it again once the stage is
+        READY (VA is not allowed while NOT REFERENCED).
+        """
         self._write("RS")
         self._sleep(1.0)
         deadline = self._clock() + RESET_TIMEOUT_S
@@ -221,8 +230,7 @@ class ConexStage:
             except DeviceError:
                 state = None
             if state is State.NOT_HOMED:
-                self._query("TE")
-                self._apply_velocity()  # VA is a working value; the reboot discarded it
+                self._clear_error()
                 return
             if self.abort.is_set():
                 break  # Stop pressed: the stage cannot move while it reboots, so stop waiting
@@ -232,16 +240,21 @@ class ConexStage:
         raise DeviceError(f"Reset of {self.port} interrupted by Stop. Check the stage state.")
 
     def get_velocity(self) -> float:
-        return self._query_number("VA?")
+        """The speed for moves (VA?). The worker asks only in READY."""
+        try:
+            return self._query_number("VA?")
+        finally:
+            with contextlib.suppress(DeviceError):  # keep the query's own error, if any
+                self._clear_error()  # a refused query must not be blamed on the next command
 
     def set_velocity(self, velocity: float) -> None:
-        """VA is a working value: the controller forgets it on reset, so keep it here."""
-        self._command(f"VA{format_number(velocity)}")
-        self._velocity = velocity
+        """Set the speed for the next moves (VA), in READY only.
 
-    def _apply_velocity(self) -> None:
-        if self._velocity is not None and not self._read_only:
-            self._command(f"VA{format_number(self._velocity)}")
+        In READY the controller accepts a speed up to the maximum stored in its
+        configuration and refuses a higher one with error C (CONEX-CC manual, VA). The
+        value is a working value: a reset or power-off restores the stored speed.
+        """
+        self._command(f"VA{format_number(velocity)}")
 
     # -- protocol ---------------------------------------------------------------------------
 
@@ -297,8 +310,18 @@ class ConexStage:
             raise DeviceError(f"Unexpected answer from {self.port} to {code}: {value!r}.") from None
 
     def _command(self, code: str) -> None:
+        """Send a command and raise if the controller refused it.
+
+        The controller keeps a command error until TE reads it; a successful command does
+        not clear it (CONEX-CC manual, TE). So TE is read before the command too, and the
+        error read after it belongs to this command only.
+        """
+        self._clear_error()
         self._write(code)
         error = self._query("TE")
         if error and error != "@":
             message = COMMAND_ERRORS.get(error, f"error {error}")
             raise DeviceError(f"The CONEX-CC on {self.port} refused {code[:2]}: {message}.")
+
+    def _clear_error(self) -> None:
+        self._query("TE")

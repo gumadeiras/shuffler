@@ -15,11 +15,9 @@ def driver_factory(app: AppConfig, *, demo: bool = False) -> Callable[[StageConf
             return demo_stage(stage)
         if stage.driver == "conex":
             assert stage.port is not None
-            return ConexStage(stage.port, units=stage.units, velocity=stage.velocity)
+            return ConexStage(stage.port, units=stage.units)
         assert stage.serial is not None
-        return KinesisStage(
-            stage.serial, kinesis_dir=app.kinesis_dir, units=stage.units, velocity=stage.velocity
-        )
+        return KinesisStage(stage.serial, kinesis_dir=app.kinesis_dir, units=stage.units)
 
     return make
 
@@ -42,5 +40,6 @@ def demo_stage(stage: StageConfig) -> FakeStage:
         units=stage.units,
         upper=25.0,
         start=12.5,
-        velocity=2.0,
+        velocity=2.0,  # also the stored maximum, as on the controller
+        conex=True,
     )

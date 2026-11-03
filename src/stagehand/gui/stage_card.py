@@ -389,11 +389,16 @@ class StageCard(QFrame):
             else:
                 self.speed_box.setValue(status.velocity)
         units = self.config.units
-        limit = status.info.max_velocity if status.info else None
+        limit = self.worker.speed_limit()
+        if limit is not None:
+            ceiling = f" Maximum {limit:g} {units}/s."
+        elif self.config.driver == "conex":
+            ceiling = " Maximum: the speed stored in the controller."
+        else:
+            ceiling = ""
         self.speed_box.setToolTip(
-            f"Speed for moves and jogs, in {units}/s"
-            + (f" (controller maximum {limit:g} {units}/s)" if limit else "")
-            + ". Homing uses the controller's own homing speed."
+            f"Speed for moves and jogs, in {units}/s.{ceiling} Set it when the stage is "
+            "homed and still. Homing uses the controller's own homing speed."
         )
 
     def _enable(self, status: StageStatus) -> None:
@@ -403,7 +408,8 @@ class StageCard(QFrame):
         for widget in (self.target_box, self.go_button, self.back_button, self.forward_button):
             widget.setEnabled(can_move)
         self.step_box.setEnabled(connected)
-        self.speed_box.setEnabled(connected and not state.busy and status.velocity is not None)
+        # Only in READY: a CONEX-CC refuses VA before homing and during motion.
+        self.speed_box.setEnabled(state is State.READY and status.velocity is not None)
         self._update_speed_button()
         not_homed = state is State.NOT_HOMED
         self.home_button.setEnabled(connected and not state.busy)

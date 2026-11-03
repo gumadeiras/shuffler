@@ -147,7 +147,8 @@ class MainWindow(QMainWindow):
         self.presets.message.connect(self.say)
         for card in self.cards:
             axis = self.axes.get(card.worker.name)
-            card.worker.speed = axis.speed  # applied when the stage connects
+            if axis.speed is not None:  # else the stages.toml velocity, if any
+                card.worker.speed = axis.speed  # applied when the stage is READY
             self._apply_axis(card, axis, refresh=False)
         self.presets.set_axes({c.worker.name: c.axis for c in self.cards})
         self._arrange(self.axes.order())

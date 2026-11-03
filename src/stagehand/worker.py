@@ -74,9 +74,14 @@ class StageWorker:
         # Controller coordinate -> the number the window shows (a reversed axis mirrors it).
         # Used only in messages; the window sets it.
         self.display: Callable[[float], float] = lambda value: value
-        # The speed this stage should use (units/s). The window loads the saved value; a
-        # successful set_velocity() updates it, and the window saves it. Applied on connect.
-        self.speed: float | None = None
+        # The speed this stage should use (units/s): the value saved in the window, else
+        # `velocity` from stages.toml, else None (keep the controller's speed). A
+        # successful set_velocity() updates it, and the window saves it. It is applied,
+        # after the same checks as a typed speed, each time the stage becomes READY after
+        # a connect, home, or reset: both controllers forget a working speed, and a
+        # CONEX-CC accepts VA only in READY.
+        self.speed: float | None = config.velocity
+        self._speed_due = False
         self._make_driver = make_driver
         self._poll_s = poll_s
         self._clock = clock
@@ -215,47 +220,77 @@ class StageWorker:
             info.upper,
             info.units,
         )
-        self._poll()
-        problems = []
+        self._speed_due = True
+        self._poll()  # applies the speed now if the stage is already READY
         if allowed is None:
-            problems.append(
-                f"min and max in stages.toml are outside the controller travel "
+            self._set(
+                error=f"min and max in stages.toml are outside the controller travel "
                 f"({info.lower:g} to {info.upper:g} {info.units}). Moves are blocked."
             )
-        if self.speed is not None:  # the controller forgets the speed on power-off
-            try:
-                self._check_speed(self.speed)
-                driver.set_velocity(self.speed)
-                log.info("%s: speed %g %s/s applied", self._who, self.speed, info.units)
-            except DeviceError as error:
-                problems.append(f"The saved speed was not applied: {error}")
-        self._read_velocity()
-        if problems:
-            self._set(error=" ".join(problems))
 
     def _do_set_velocity(self, velocity: float) -> None:
-        driver = self._connected_driver()
-        self._refuse_if_busy("Set the speed when the stage is still.")
+        driver = self._ready_driver()  # homed and still: a CONEX-CC accepts VA only in READY
         self._check_speed(velocity)
         driver.set_velocity(velocity)
         self.speed = velocity
+        self._speed_due = False
         self._read_velocity()
         log.info("%s: speed set to %g %s/s", self._who, velocity, self.config.units)
+
+    def speed_limit(self) -> float | None:
+        """The highest speed the app sends: the lower of the controller's reported maximum
+        and `max_velocity` in stages.toml. A CONEX-CC reports none, but refuses a speed above
+        the maximum stored in its configuration (error C)."""
+        info = self._status.info
+        limits = [v for v in (info.max_velocity if info else None, self.config.max_velocity) if v]
+        return min(limits) if limits else None
 
     def _check_speed(self, velocity: float) -> None:
         units = self.config.units
         if not math.isfinite(velocity) or velocity <= 0:
             raise DeviceError(f"{self.label}: the speed must be more than 0 {units}/s.")
-        info = self._status.info
-        if info is not None and info.max_velocity is not None and velocity > info.max_velocity:
+        limit = self.speed_limit()
+        if limit is not None and velocity > limit:
             raise DeviceError(
-                f"{self.label}: {velocity:g} {units}/s is above the controller maximum "
-                f"of {info.max_velocity:g} {units}/s."
+                f"{self.label}: {velocity:g} {units}/s is above the maximum of {limit:g} {units}/s."
             )
 
-    def _read_velocity(self) -> None:
-        """The speed the controller reports. A read failure does not stop the stage."""
+    def _apply_speed(self) -> None:
+        """Set the wanted speed again (the stage just became READY after connect/home/reset).
+
+        Then enforce `max_velocity` from stages.toml on the controller's own speed too: a
+        speed left by another program, or a CONEX-CC's stored speed after a reset, can be
+        higher than the ceiling, and moves use it unless the app sets one.
+        """
         assert self._driver is not None
+        self._speed_due = False
+        units = self.config.units
+        if self.speed is not None:
+            try:
+                self._check_speed(self.speed)
+                self._driver.set_velocity(self.speed)
+                log.info("%s: speed %g %s/s applied", self._who, self.speed, units)
+            except DeviceError as error:
+                log.warning("%s: saved speed not applied: %s", self._who, error)
+                self._set(error=f"The saved speed of {self.speed:g} was not applied: {error}")
+        self._read_velocity()
+        ceiling = self.config.max_velocity
+        current = self._status.velocity
+        if ceiling is not None and (current is None or current > ceiling):
+            try:
+                self._driver.set_velocity(ceiling)
+                log.info("%s: speed lowered to max_velocity %g %s/s", self._who, ceiling, units)
+            except DeviceError as error:
+                log.error("%s: cannot lower the speed to max_velocity: %s", self._who, error)
+                self._set(error=f"Cannot lower the speed to max_velocity {ceiling:g}: {error}")
+            self._read_velocity()
+
+    def _read_velocity(self) -> None:
+        """The speed the controller reports, read only in READY (a CONEX-CC refuses VA?
+        in other states). A read failure does not stop the stage."""
+        assert self._driver is not None
+        if self._status.state is not State.READY:
+            return
         try:
             self._set(velocity=self._driver.get_velocity())
         except DeviceError as error:
@@ -317,6 +352,7 @@ class StageWorker:
         self._refuse_if_busy()
         driver.home()
         self._hold(State.HOMING, None)
+        self._speed_due = True  # a CONEX-CC resets before homing, which restores its speed
         log.info("%s: home search", self._who)
 
     def _do_stop(self) -> None:
@@ -333,7 +369,7 @@ class StageWorker:
         driver.reset()
         self._latch = None
         self._set(target=None)
-        self._read_velocity()  # the driver applies the speed again after a reboot
+        self._speed_due = True  # applied again once the stage is homed and READY
         log.info("%s: reset", self._who)
 
     def _poll(self) -> None:
@@ -354,7 +390,15 @@ class StageWorker:
         }
         if state is State.NOT_HOMED:
             changes["target"] = None
+        if state in (State.NOT_HOMED, State.OFFLINE):
+            changes["velocity"] = None  # unknown until READY (a reset restores the default)
+        was_ready = self._status.state is State.READY
         self._set(**changes)
+        if state is State.READY and (self._speed_due or not was_ready):
+            if self._speed_due:
+                self._apply_speed()
+            elif self._status.velocity is None:
+                self._read_velocity()
 
     def _lost_contact(self, error: DeviceError) -> None:
         log.error("%s: lost contact: %s", self._who, error)

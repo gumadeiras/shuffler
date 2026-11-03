@@ -22,6 +22,8 @@ class FakeConexPort:
         self.state = "32"
         self.flags = 0
         self.position = 1.5
+        self.stored_velocity = 2.0  # the configured maximum, and the speed after a reboot
+        self.velocity = 2.0
         self.error = "@"
         self.silent = False
         self.late = False  # the next reply arrives after the read times out
@@ -92,12 +94,23 @@ class FakeConexPort:
             return None
         if code == "RS":
             self.state = "0A"
+            self.velocity = self.stored_velocity  # a reboot restores the stored speed
             return None
         if code == "ST":
             if self.state != "28":
                 self.error = "D"
             return None
-        if code.startswith("VA"):
+        if code == "VA?":
+            return f"VA{self.velocity}"
+        if code.startswith("VA"):  # allowed in READY (and DISABLE/CONFIGURATION) only
+            if self.state.startswith("0"):
+                self.error = "H"
+            elif self.state == "28":
+                self.error = "M"
+            elif not 1e-6 < float(code[2:]) <= self.stored_velocity:
+                self.error = "C"  # up to the value stored in CONFIGURATION
+            else:
+                self.velocity = float(code[2:])
             return None
         self.error = "A"
         return None
@@ -217,16 +230,36 @@ class ConexTest(unittest.TestCase):
         with self.assertRaisesRegex(DeviceError, "not allowed before the stage is homed"):
             self.stage.move_to(1.0)  # the TE read belongs to this PA, not to an old query
 
-    def test_velocity_is_set_again_after_a_reset(self) -> None:
-        stage = ConexStage(
-            "COM3", velocity=0.5, serial_factory=lambda **_: self.port, sleep=lambda _s: None
-        )
-        stage.open()
-        stage.home()  # homed stage: RS, then OR
-        sent = self.port.written
-        reset = sent.index("1RS")
-        self.assertIn("1VA0.500000", sent[reset:])
-        self.assertLess(sent.index("1VA0.500000", reset), sent.index("1OR"))
+    def test_no_velocity_is_sent_while_not_referenced(self) -> None:
+        """VA is refused while NOT REFERENCED (manual: error H). Connect and the reset
+        before a home search must not send it."""
+        self.port.state = "0A"  # just powered on
+        self.stage.open()
+        self.port.state = "32"
+        self.stage.home()  # homed stage: RS, then OR
+        self.assertFalse([c for c in self.port.written if c.startswith("1VA")])
+        self.assertLess(self.port.written.index("1RS"), self.port.written.index("1OR"))
+
+    def test_speed_up_to_the_stored_maximum(self) -> None:
+        self.stage.open()
+        self.stage.set_velocity(1.0)
+        self.assertEqual(self.stage.get_velocity(), 1.0)
+        with self.assertRaisesRegex(DeviceError, "refused VA: parameter missing or out of range"):
+            self.stage.set_velocity(5.0)  # above the configured maximum of 2
+        self.assertEqual(self.stage.get_velocity(), 1.0, "a refused value changes nothing")
+
+    def test_speed_is_refused_before_homing(self) -> None:
+        self.port.state = "0A"
+        self.stage.open()
+        with self.assertRaisesRegex(DeviceError, "not allowed before the stage is homed"):
+            self.stage.set_velocity(1.0)
+
+    def test_a_stale_error_is_not_blamed_on_the_next_command(self) -> None:
+        """TE keeps an error until read; a command that works does not clear it."""
+        self.stage.open()
+        self.port.error = "H"  # left by a refused query
+        self.stage.move_to(3.0)  # accepted: no error may be reported
+        self.assertEqual(self.port.position, 3.0)
 
     def test_stop_cancels_a_home_before_the_search_starts(self) -> None:
         self.stage.open()
@@ -235,12 +268,11 @@ class ConexTest(unittest.TestCase):
             self.stage.home()
         self.assertNotIn("1OR", self.port.written)
 
-    def test_velocity_only_when_configured_and_not_read_only(self) -> None:
-        stage = ConexStage("COM3", velocity=1.5, serial_factory=lambda **_: self.port)
-        stage.open(read_only=True)
-        self.assertFalse(any(c.startswith("1VA") for c in self.port.written))
-        stage.open()
-        self.assertIn("1VA1.500000", self.port.written)
+    def test_connect_writes_nothing(self) -> None:
+        """Connecting only reads: VE, ID?, SL?, SR? and TE."""
+        self.stage.open()
+        codes = {c[1:3] for c in self.port.written}
+        self.assertLessEqual(codes, {"VE", "ID", "SL", "SR", "TE"})
 
 
 class ParseStatusTest(unittest.TestCase):

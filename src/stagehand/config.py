@@ -28,7 +28,8 @@ class StageConfig:
     units: str = "mm"
     min: float | None = None  # optional limits, inside the controller's own limits
     max: float | None = None
-    velocity: float | None = None  # applied when the stage connects; None keeps the device value
+    velocity: float | None = None  # starting speed until one is set in the window
+    max_velocity: float | None = None  # the app never sends a higher speed
     jog_steps: tuple[float, ...] = DEFAULT_JOG_STEPS
     decimals: int = 4
 
@@ -62,6 +63,7 @@ STAGE_KEYS = {
     "min",
     "max",
     "velocity",
+    "max_velocity",
     "jog_steps",
     "decimals",
 }
@@ -147,6 +149,11 @@ def _stage(raw: Any, index: int) -> StageConfig:
     velocity = _number(raw, "velocity", where)
     if velocity is not None and velocity <= 0:
         raise ConfigError(f"{where}: velocity must be more than zero.")
+    max_velocity = _number(raw, "max_velocity", where)
+    if max_velocity is not None and max_velocity <= 0:
+        raise ConfigError(f"{where}: max_velocity must be more than zero.")
+    if velocity is not None and max_velocity is not None and velocity > max_velocity:
+        raise ConfigError(f"{where}: velocity must not be more than max_velocity.")
 
     steps = raw.get("jog_steps", DEFAULT_JOG_STEPS)
     if (
@@ -169,6 +176,7 @@ def _stage(raw: Any, index: int) -> StageConfig:
         min=low,
         max=high,
         velocity=velocity,
+        max_velocity=max_velocity,
         jog_steps=tuple(sorted(float(s) for s in steps)),
         decimals=decimals,
     )
