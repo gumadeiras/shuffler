@@ -62,8 +62,8 @@ DEMO_CONFIG = {
 
 
 class MainWindow(QMainWindow):
-    """Layout, top to bottom: the cards row, the presets panel, and a footer with the
-    status text, Connect all, and Stop all.
+    """Layout, top to bottom: a bar with the status text, Connect all, and Stop all; the
+    cards row; and the presets panel.
 
     All sizes come from the widgets' own size hints; nothing has a hand-set height. The
     window's minimum size is the sum of the minimums, so the cards row and the presets
@@ -143,23 +143,23 @@ class MainWindow(QMainWindow):
         self.presets.set_axes({c.worker.name: c.axis for c in self.cards})
         self._arrange(self.axes.order())
 
-        # The footer: status text, then the controls for all stages. Stop all stays in
-        # view at the bottom right, turns pink while a stage moves, and Esc works from
-        # anywhere. A separate toolbar row above the cards would hold only these buttons.
-        footer = QHBoxLayout()
-        footer.setSpacing(theme.GAP)
-        footer.addWidget(demo_badge, 0, Qt.AlignVCenter)
-        footer.addWidget(self.status_label, 1, Qt.AlignVCenter)
-        footer.addWidget(self.connect_all_button)
-        footer.addWidget(self.stop_all_button)
+        # The top bar: status text, then the controls for all stages. Stop all stays in
+        # view at the top right, turns pink while a stage moves, and Esc works from
+        # anywhere. Status text and these buttons share one row, so neither needs its own.
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(theme.GAP)
+        top_bar.addWidget(demo_badge, 0, Qt.AlignVCenter)
+        top_bar.addWidget(self.status_label, 1, Qt.AlignVCenter)
+        top_bar.addWidget(self.connect_all_button)
+        top_bar.addWidget(self.stop_all_button)
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(theme.MARGIN, theme.MARGIN, theme.MARGIN, theme.MARGIN)
         layout.setSpacing(theme.SECTION_GAP)
+        layout.addLayout(top_bar)
         layout.addWidget(self.cards_box)
         layout.addWidget(self.presets, 1)
-        layout.addLayout(footer)
         self.setCentralWidget(central)
         self._fit_cards()
 
