@@ -1,0 +1,44 @@
+# stagehand configuration. Copy this file to stages.toml (git-ignored) and edit it.
+# `uv run stagehand ports` lists the COM ports and Thorlabs serial numbers.
+
+[app]
+# Saved positions, relative to this file.
+presets = "presets.json"
+# Where Thorlabs Kinesis is installed (64-bit).
+kinesis_dir = "C:/Program Files/Thorlabs/Kinesis"
+# Connect to every stage when the window opens.
+connect_on_start = true
+# Ask before a home search and before going to a preset.
+confirm_moves = true
+
+# One [[stage]] table per axis. The window shows them in this order.
+#
+#   name       label in the window and in presets (renaming a stage orphans its
+#              positions in existing presets)
+#   driver     "conex" (Newport CONEX-CC) or "kinesis" (Thorlabs K-Cube)
+#   port       conex: the COM port
+#   serial     kinesis: the 8-digit serial number (28xxxxxx = KBD101, 27xxxxxx = KDC101)
+#   min, max   optional: a safe range inside the controller's travel. Moves outside
+#              it are refused. Use this to keep a stage clear of the objective.
+#   velocity   optional: set on connect, in units/s. Omit it to keep the device value.
+#   jog_steps  optional: the step sizes offered for the - and + buttons
+#   decimals   optional: digits shown after the decimal point (default 4)
+
+[[stage]]
+name = "CONEX A"
+driver = "conex"
+port = "COM3"
+# min = 0.0
+# max = 25.0
+
+[[stage]]
+name = "CONEX B"
+driver = "conex"
+port = "COM4"
+
+[[stage]]
+name = "DDS100"
+driver = "kinesis"
+serial = "28253849"
+jog_steps = [0.01, 0.1, 1.0, 10.0]
+# velocity = 10.0

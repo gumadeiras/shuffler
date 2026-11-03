@@ -1,0 +1,369 @@
+"""One thread per stage. It owns the driver, runs commands in order, and polls the stage.
+
+The GUI never calls a driver. It puts commands on the worker's queue and reads
+``worker.status``, an immutable snapshot that the worker replaces after each change.
+Stop removes queued motion commands first, so it never waits behind them, and it
+sets an abort flag that a long driver sequence (the CONEX reset before a home) checks.
+
+Every rule that protects the hardware is here, so the GUI and the tests share them:
+a move needs a connected, homed, idle stage and a target inside the allowed range
+(the controller's travel limits, narrowed by ``min`` and ``max`` in stages.toml).
+
+A controller can report the old status for a short time after it accepts a move
+(Kinesis refreshes its status every 100 ms). So after a move or home command the
+worker keeps the stage busy until the controller reports the motion, the stage is
+at the target, or ``LATCH_S`` passes. Without this, a second command could pass
+the idle check while the first one starts.
+"""
+
+import contextlib
+import logging
+import queue
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from typing import Any
+
+from stagehand.config import StageConfig
+from stagehand.stage import DeviceError, StageDriver, StageInfo, State
+
+log = logging.getLogger("stagehand")
+
+POLL_S = 0.1
+READ_FAILURE_LIMIT = 5
+TOLERANCE = 1e-6  # floating point slack on range checks
+SETTLED = 0.002  # a jog continues from the last target when the stage is this close to it
+LATCH_S = 0.75  # how long a command keeps the stage busy until the controller confirms it
+MOTION = frozenset({"move_to", "move_by", "home", "reset"})
+
+
+@dataclass(frozen=True)
+class StageStatus:
+    name: str
+    state: State = State.OFFLINE
+    position: float | None = None
+    target: float | None = None
+    info: StageInfo | None = None
+    allowed: tuple[float, float] | None = None
+    detail: str = ""
+    error: str = ""
+
+
+def allowed_range(config: StageConfig, info: StageInfo) -> tuple[float, float] | None:
+    """The controller's travel limits narrowed by the configured min and max."""
+    low = info.lower if config.min is None else max(info.lower, config.min)
+    high = info.upper if config.max is None else min(info.upper, config.max)
+    return (low, high) if low < high else None
+
+
+class StageWorker:
+    def __init__(
+        self,
+        config: StageConfig,
+        make_driver: Callable[[StageConfig], StageDriver],
+        *,
+        poll_s: float = POLL_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.config = config
+        self._make_driver = make_driver
+        self._poll_s = poll_s
+        self._clock = clock
+        self._driver: StageDriver | None = None
+        self._commands: queue.Queue[tuple[str, tuple[Any, ...]]] = queue.Queue()
+        self._failures = 0
+        self._latch: tuple[State, float | None, float] | None = None  # state, target, deadline
+        self._abort = threading.Event()
+        self._quit = threading.Event()
+        self._status = StageStatus(config.name)
+        self._thread = threading.Thread(target=self._run, name=f"stage-{config.name}", daemon=True)
+
+    # -- any thread -------------------------------------------------------------------------
+
+    @property
+    def status(self) -> StageStatus:
+        return self._status
+
+    @property
+    def name(self) -> str:
+        return self.config.name
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def connect(self) -> None:
+        self._put("connect")
+
+    def disconnect(self) -> None:
+        self._put("disconnect")
+
+    def move_to(self, position: float) -> None:
+        self._put("move_to", position)
+
+    def move_by(self, delta: float) -> None:
+        self._put("move_by", delta)
+
+    def home(self) -> None:
+        self._put("home")
+
+    def reset(self) -> None:
+        self._put("reset")
+
+    def stop(self) -> None:
+        """Drop queued motion, interrupt a long sequence, then stop."""
+        self._abort.set()
+        self._drain(only=MOTION)
+        self._put("stop")
+
+    def shutdown(self, timeout: float = 5.0) -> None:
+        """Stop the stage, disconnect, and end the thread."""
+        self._abort.set()
+        self._drain()
+        self._put("disconnect")
+        self._put("quit")
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+        else:
+            while not self._quit.is_set() and not self._commands.empty():
+                self.tick(0)
+
+    # -- worker thread ----------------------------------------------------------------------
+
+    def _run(self) -> None:
+        while not self._quit.is_set():
+            try:
+                self.tick(self._poll_s)
+            except Exception as error:  # keep the thread alive, so Stop still works
+                log.exception("%s: unexpected error in the worker", self.name)
+                self._set(error=f"Unexpected error: {error}")
+                time.sleep(self._poll_s)
+
+    def tick(self, timeout: float) -> None:
+        """Run at most one command, then poll. The tests call this without a thread."""
+        try:
+            name, args = self._commands.get(timeout=timeout) if timeout else self._get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            self._execute(name, args)
+        if self._driver is not None:
+            self._poll()
+
+    def _execute(self, name: str, args: tuple[Any, ...]) -> None:
+        if name == "quit":
+            self._quit.set()
+            return
+        if name in MOTION or name == "connect":
+            self._abort.clear()  # a Stop pressed before this command does not cancel it
+        if name not in ("stop", "disconnect"):
+            self._set(error="")
+        try:
+            getattr(self, f"_do_{name}")(*args)
+        except DeviceError as error:
+            log.warning("%s: %s", self.name, error)
+            self._set(error=str(error))
+        except Exception as error:
+            log.exception("%s: unexpected error in %s", self.name, name)
+            self._set(error=f"Unexpected error: {error}")
+
+    def _do_connect(self) -> None:
+        if self._driver is not None:
+            return
+        self._set(state=State.CONNECTING, detail="", error="")
+        try:
+            driver = self._make_driver(self.config)
+            if hasattr(driver, "abort"):
+                driver.abort = self._abort  # lets Stop interrupt a long driver sequence
+            info = driver.open()
+        except DeviceError as error:
+            self._set(state=State.OFFLINE, error=str(error))
+            log.warning("%s: %s", self.name, error)
+            return
+        except Exception as error:
+            log.exception("%s: cannot connect", self.name)
+            self._set(state=State.OFFLINE, error=f"Cannot connect: {error}")
+            return
+        allowed = allowed_range(self.config, info)
+        self._driver, self._failures, self._latch = driver, 0, None
+        self._set(info=info, allowed=allowed, target=None)
+        log.info(
+            "%s connected: %s at %s, travel %g to %g %s",
+            self.name,
+            info.model,
+            info.address,
+            info.lower,
+            info.upper,
+            info.units,
+        )
+        self._poll()
+        if allowed is None:
+            self._set(
+                error=f"min and max in stages.toml are outside the controller travel "
+                f"({info.lower:g} to {info.upper:g} {info.units}). Moves are blocked."
+            )
+
+    def _do_disconnect(self) -> None:
+        driver, self._driver = self._driver, None
+        if driver is None:
+            return
+        busy = self._status.state.busy
+        try:
+            with contextlib.suppress(Exception):  # harmless when idle; the cache may be stale
+                driver.stop()
+            if busy:
+                log.info("%s: stopped before disconnect", self.name)
+        finally:
+            driver.close()
+            self._latch = None
+            self._set(state=State.OFFLINE, position=None, target=None, detail="")
+            log.info("%s disconnected", self.name)
+
+    def _do_move_to(self, target: float) -> None:
+        driver = self._ready_driver()
+        target = round(target, self.config.decimals)
+        allowed = self._status.allowed
+        if allowed is None:
+            raise DeviceError(f"{self.name}: no allowed range. Check min and max in stages.toml.")
+        low, high = allowed
+        if not low - TOLERANCE <= target <= high + TOLERANCE:
+            units = self.config.units
+            raise DeviceError(
+                f"{self.name}: {self._fmt(target)} {units} is outside the allowed range "
+                f"{self._fmt(low)} to {self._fmt(high)} {units}."
+            )
+        target = min(max(target, low), high)
+        driver.move_to(target)
+        self._hold(State.MOVING, target)
+        log.info("%s: move to %s", self.name, self._fmt(target))
+
+    def _do_move_by(self, delta: float) -> None:
+        self._ready_driver()
+        status = self._status
+        base = status.position
+        if base is None:
+            raise DeviceError(f"{self.name}: the position is not known yet.")
+        if status.target is not None and abs(base - status.target) <= SETTLED:
+            base = status.target  # repeated jogs add up exactly
+        self._do_move_to(base + delta)
+
+    def _do_home(self) -> None:
+        driver = self._connected_driver()
+        self._refuse_if_busy()
+        driver.home()
+        self._hold(State.HOMING, None)
+        log.info("%s: home search", self.name)
+
+    def _do_stop(self) -> None:
+        if self._driver is None:
+            return
+        self._latch = None
+        self._driver.stop()
+        self._set(target=None)
+        log.info("%s: stop", self.name)
+
+    def _do_reset(self) -> None:
+        driver = self._connected_driver()
+        self._refuse_if_busy("Press Stop and wait for it to stop first.")
+        driver.reset()
+        self._latch = None
+        self._set(target=None)
+        log.info("%s: reset", self.name)
+
+    def _poll(self) -> None:
+        assert self._driver is not None
+        try:
+            reading = self._driver.read()
+        except DeviceError as error:
+            self._failures += 1
+            if self._failures >= READ_FAILURE_LIMIT:
+                self._lost_contact(error)
+            return
+        self._failures = 0
+        state = self._latched(reading.state, reading.position)
+        changes: dict[str, Any] = {
+            "position": reading.position,
+            "state": state,
+            "detail": reading.detail,
+        }
+        if state is State.NOT_HOMED:
+            changes["target"] = None
+        self._set(**changes)
+
+    def _lost_contact(self, error: DeviceError) -> None:
+        log.error("%s: lost contact: %s", self.name, error)
+        driver, self._driver, self._latch = self._driver, None, None
+        assert driver is not None
+        # Try to stop: a write can still get through when replies do not.
+        with contextlib.suppress(Exception):
+            driver.stop()
+        with contextlib.suppress(Exception):
+            driver.close()
+        self._set(
+            state=State.OFFLINE,
+            position=None,
+            target=None,
+            error=f"Lost contact. {error} A stop was sent. Press Connect to try again.",
+        )
+
+    # -- helpers ----------------------------------------------------------------------------
+
+    def _hold(self, state: State, target: float | None) -> None:
+        """Show the commanded motion until the controller confirms it (see module doc)."""
+        self._latch = (state, target, self._clock() + LATCH_S)
+        self._set(state=state, target=target)
+
+    def _latched(self, reported: State, position: float | None) -> State:
+        if self._latch is None:
+            return reported
+        held, target, deadline = self._latch
+        arrived = target is not None and position is not None and abs(position - target) <= SETTLED
+        if reported.busy or reported is State.ERROR or arrived or self._clock() >= deadline:
+            self._latch = None  # the controller reports for itself now
+            return reported
+        return held
+
+    def _connected_driver(self) -> StageDriver:
+        if self._driver is None:
+            raise DeviceError(f"{self.name} is not connected.")
+        return self._driver
+
+    def _refuse_if_busy(self, advice: str = "Wait or press Stop.") -> None:
+        state = self._status.state
+        if state.busy:
+            raise DeviceError(f"{self.name} is {state.value.lower()}. {advice}")
+
+    def _ready_driver(self) -> StageDriver:
+        driver = self._connected_driver()
+        state = self._status.state
+        if state is State.NOT_HOMED:
+            raise DeviceError(f"{self.name} is not homed. Home it first.")
+        self._refuse_if_busy()
+        if state is not State.READY:
+            raise DeviceError(f"{self.name} is {state.value.lower()}. Reset it first.")
+        return driver
+
+    def _set(self, **changes: Any) -> None:
+        self._status = replace(self._status, **changes)
+
+    def _put(self, name: str, *args: Any) -> None:
+        self._commands.put((name, args))
+
+    def _get_nowait(self) -> tuple[str, tuple[Any, ...]]:
+        return self._commands.get_nowait()
+
+    def _drain(self, only: frozenset[str] | None = None) -> None:
+        """Remove queued commands (all, or only those in ``only``), keeping the others in order."""
+        kept = []
+        while True:
+            try:
+                item = self._commands.get_nowait()
+            except queue.Empty:
+                break
+            if only is not None and item[0] not in only:
+                kept.append(item)
+        for item in kept:
+            self._commands.put(item)
+
+    def _fmt(self, value: float) -> str:
+        return f"{value:.{self.config.decimals}f}"
