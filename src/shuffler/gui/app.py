@@ -34,6 +34,7 @@ from shuffler.axes import Axis, AxisError, AxisStore
 from shuffler.config import AppConfig, ConfigError
 from shuffler.gui import theme
 from shuffler.gui.axis_dialog import AxisDialog
+from shuffler.gui.fly import FlyWidget
 from shuffler.gui.icons import icon
 from shuffler.gui.presets_panel import PresetsPanel
 from shuffler.gui.stage_card import StageCard
@@ -94,6 +95,7 @@ class MainWindow(QMainWindow):
         self.axes = axes or AxisStore(app_config.axes_path, keys)
         self.setWindowTitle("shuffler" + (" (demo)" if demo else ""))
 
+        self.fly = FlyWidget()  # follows the stages; see gui/fly.py
         demo_badge = QLabel("DEMO · simulated stages")
         demo_badge.setObjectName("demo")
         demo_badge.setVisible(demo)
@@ -148,6 +150,7 @@ class MainWindow(QMainWindow):
         # anywhere. Status text and these buttons share one row, so neither needs its own.
         top_bar = QHBoxLayout()
         top_bar.setSpacing(theme.GAP)
+        top_bar.addWidget(self.fly, 0, Qt.AlignVCenter)
         top_bar.addWidget(demo_badge, 0, Qt.AlignVCenter)
         top_bar.addWidget(self.status_label, 1, Qt.AlignVCenter)
         top_bar.addWidget(self.connect_all_button)
@@ -205,6 +208,7 @@ class MainWindow(QMainWindow):
             card.show_status(status)
         self._fit_cards()
         self.presets.show_statuses(statuses)
+        self.fly.show_states(s.state for s in statuses.values())
         live = any(s.state.busy for s in statuses.values())
         if self.stop_all_button.property("live") != live:
             self.stop_all_button.setProperty("live", live)
@@ -298,6 +302,7 @@ class MainWindow(QMainWindow):
     def stop_all(self) -> None:
         for worker in self.workers:
             worker.stop()
+        self.fly.startle()  # after the stops are queued, never before
         self.say("Stop sent to every stage.", 5000)
         log.info("stop all")
 

@@ -8,8 +8,7 @@ drawn the same way on every platform.
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
 from shuffler.stage import State
@@ -211,32 +210,10 @@ def pill_style(state: State) -> str:
     )
 
 
-def window_icon() -> QIcon:
-    """A navy tile with a cream crosshair and a pink target dot, drawn at run time."""
-    result = QIcon()
-    for size in (16, 24, 32, 48, 64, 128, 256):
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(NAVY))
-        painter.drawRoundedRect(QRectF(0, 0, size, size), size * 0.22, size * 0.22)
-        pen = QPen(QColor(CREAM), max(1.0, size / 14), Qt.SolidLine, Qt.RoundCap)
-        painter.setPen(pen)
-        middle, reach = size / 2, size * 0.3
-        painter.drawLine(QPointF(middle - reach, middle), QPointF(middle + reach, middle))
-        painter.drawLine(QPointF(middle, middle - reach), QPointF(middle, middle + reach))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(PINK))
-        painter.drawEllipse(QPointF(middle, middle), size * 0.11, size * 0.11)
-        painter.end()
-        result.addPixmap(pixmap)
-    return result
-
-
 def apply(application: QApplication) -> None:
     """Style, palette, font, and window icon. Call once before the window is built."""
+    from shuffler.gui.fly import window_icon  # fly.py uses this module's colors
+
     application.setStyle("Fusion")
     application.setPalette(palette())
     body = QFont(application.font())

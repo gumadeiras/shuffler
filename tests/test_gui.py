@@ -8,14 +8,16 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, QSize
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from shuffler import config
 from shuffler.axes import AxisStore
 from shuffler.fakes import FakeStage
+from shuffler.gui import fly as fly_module
 from shuffler.gui import theme
 from shuffler.gui.app import MainWindow
+from shuffler.gui.fly import FlyWidget
 from shuffler.gui.presets_panel import GoToPresetDialog, SavePresetDialog, at_preset
 from shuffler.presets import PresetStore
 from shuffler.stage import State
@@ -412,6 +414,93 @@ class WindowTest(unittest.TestCase):
         self.assertTrue(self.card("Z").right_action.isEnabled())
         axes = AxisStore(self.app_config.axes_path, self.app_config.stage_names)
         self.assertEqual(axes.order(), ["Z", "X"])
+
+    # -- the fly ----------------------------------------------------------------------------
+
+    def test_the_fly_follows_the_stages(self) -> None:
+        fly = self.window.fly
+        self.assertEqual(fly.mode, "asleep", "no stage connected")
+        self.ready()
+        self.assertEqual(fly.mode, "groom", "homing ended: the fly tidies up")
+        self.card("X").forward_button.click()
+        self.run_all()
+        self.assertEqual(fly.mode, "shuffle")
+        self.window.stop_all()
+        self.assertTrue(fly.jumping, "Stop all: the escape jump")
+
+
+class FlyTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.clock = Clock()
+
+    def fly(self, *, reduced: bool) -> FlyWidget:
+        widget = FlyWidget(reduced=reduced, clock=self.clock)
+        widget.resize(widget.sizeHint())
+        return widget
+
+    def test_shuffle_then_groom_then_rest(self) -> None:
+        fly = self.fly(reduced=False)
+        fly.show_states([State.READY, State.MOVING])
+        self.assertEqual(fly.mode, "shuffle")
+        self.assertTrue(fly.animating)
+        self.assertTrue(fly.pose().live)
+        fly.show_states([State.READY, State.READY])
+        self.assertEqual(fly.mode, "groom", "the move ended: the fly tidies up")
+        self.clock.now += fly_module.GROOM_S + 0.01
+        fly._frame()
+        self.assertEqual(fly.mode, "rest")
+        self.assertFalse(fly.animating, "no frames while nothing animates")
+
+    def test_no_groom_when_the_stages_disconnect(self) -> None:
+        fly = self.fly(reduced=False)
+        fly.show_states([State.MOVING])
+        fly.show_states([State.OFFLINE])
+        self.assertEqual(fly.mode, "asleep")
+
+    def test_jump_ends(self) -> None:
+        fly = self.fly(reduced=False)
+        fly.show_states([State.READY])
+        fly.startle()
+        self.assertTrue(fly.jumping)
+        self.assertTrue(fly.animating)
+        self.clock.now += fly_module.JUMP_S / 2
+        self.assertGreater(fly.pose().lift, 0.99, "the top of the jump")
+        self.assertGreater(fly.pose().wings, fly_module.FOLDED_DEG + 20, "wings out")
+        self.clock.now += fly_module.JUMP_S / 2 + 0.01
+        fly._frame()
+        self.assertFalse(fly.jumping)
+        self.assertFalse(fly.animating)
+
+    def test_reduced_motion_never_moves(self) -> None:
+        fly = self.fly(reduced=True)
+        fly.show_states([State.HOMING])
+        self.assertFalse(fly.animating)
+        self.assertEqual(fly.pose(), fly_module.Pose(live=True), "pink, and still")
+        fly.show_states([State.READY])
+        self.assertEqual(fly.mode, "rest", "no groom")
+        fly.startle()
+        self.assertFalse(fly.animating)
+        self.assertTrue(fly.pose().live, "Stop all lights the eyes")
+
+    def test_reduce_motion_setting(self) -> None:
+        for value, expected in (("1", True), ("yes", True), ("0", False), ("", False)):
+            with mock.patch.dict(os.environ, {"SHUFFLER_REDUCE_MOTION": value}):
+                self.assertEqual(fly_module.reduce_motion(), expected)
+
+    def test_every_mode_paints(self) -> None:
+        fly = self.fly(reduced=False)
+        for states in ([State.OFFLINE], [State.READY], [State.MOVING], [State.READY]):
+            fly.show_states(states)
+            self.clock.now += 0.37
+            self.assertFalse(fly.grab().isNull())
+        fly.startle()
+        self.clock.now += fly_module.JUMP_S / 2
+        self.assertFalse(fly.grab().isNull())
+
+    def test_window_icon(self) -> None:
+        sizes = fly_module.window_icon().availableSizes()
+        self.assertIn(QSize(16, 16), sizes)
+        self.assertIn(QSize(256, 256), sizes)
 
 
 class ThemeTest(unittest.TestCase):
