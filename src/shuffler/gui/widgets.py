@@ -12,7 +12,7 @@ from PySide6.QtCore import QLocale, QSize, Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import QLabel, QLineEdit, QSizePolicy, QWidget
 
-from stagehand.gui import theme
+from shuffler.gui import theme
 
 
 class WrapLabel(QLabel):

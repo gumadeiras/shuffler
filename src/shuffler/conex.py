@@ -21,7 +21,7 @@ from typing import Any
 
 import serial
 
-from stagehand.stage import DeviceError, Reading, StageInfo, State
+from shuffler.stage import DeviceError, Reading, StageInfo, State
 
 BAUD_RATE = 921600
 TIMEOUT_S = 0.3

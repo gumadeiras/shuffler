@@ -2,10 +2,10 @@
 
 import unittest
 
-from stagehand.config import StageConfig
-from stagehand.fakes import FakeStage
-from stagehand.stage import Reading, State
-from stagehand.worker import LATCH_S, READ_FAILURE_LIMIT, StageWorker
+from shuffler.config import StageConfig
+from shuffler.fakes import FakeStage
+from shuffler.stage import Reading, State
+from shuffler.worker import LATCH_S, READ_FAILURE_LIMIT, StageWorker
 
 
 class Clock:

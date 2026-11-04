@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from stagehand.stage import DeviceError, Reading, StageInfo, State
+from shuffler.stage import DeviceError, Reading, StageInfo, State
 
 
 @dataclass(frozen=True)

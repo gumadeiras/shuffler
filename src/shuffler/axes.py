@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from stagehand.jsonfile import write_atomic
+from shuffler.jsonfile import write_atomic
 
 MAX_LABEL = 24
 

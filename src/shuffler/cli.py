@@ -1,7 +1,7 @@
 """Diagnostics only. Nothing here moves a stage.
 
-stagehand ports            list serial ports and Thorlabs controllers
-stagehand probe            connect to each configured stage, read it, disconnect
+shuffler ports            list serial ports and Thorlabs controllers
+shuffler probe            connect to each configured stage, read it, disconnect
 """
 
 import argparse
@@ -10,14 +10,14 @@ from pathlib import Path
 
 from serial.tools import list_ports
 
-from stagehand import config as config_module
-from stagehand.config import ConfigError
-from stagehand.rig import driver_factory
-from stagehand.stage import DeviceError
+from shuffler import config as config_module
+from shuffler.config import ConfigError
+from shuffler.rig import driver_factory
+from shuffler.stage import DeviceError
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="stagehand", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog="shuffler", description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path("stages.toml"))
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("ports", help="list serial ports and Thorlabs controllers")
@@ -40,7 +40,7 @@ def ports(config_path: Path) -> int:
             print(f"({error})")
     print("Thorlabs controllers:")
     try:
-        from stagehand.kinesis import _load
+        from shuffler.kinesis import _load
 
         _load(kinesis_dir, "Thorlabs.MotionControl.DeviceManagerCLI")
         from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI

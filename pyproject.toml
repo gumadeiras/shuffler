@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "stagehand"
+name = "shuffler"
 version = "0.1.0"
 description = "Simple control for the rig's motorized stages (Newport CONEX-CC and Thorlabs Kinesis)"
 readme = "README.md"
@@ -15,14 +15,14 @@ dependencies = [
 ]
 
 [project.scripts]
-stagehand = "stagehand.cli:main"
-stagehand-gui = "stagehand.gui.app:main"
+shuffler = "shuffler.cli:main"
+shuffler-gui = "shuffler.gui.app:main"
 
 [dependency-groups]
 dev = ["ruff>=0.15,<1"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/stagehand"]
+packages = ["src/shuffler"]
 
 [tool.ruff]
 line-length = 100

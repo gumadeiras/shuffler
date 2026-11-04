@@ -26,10 +26,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
-from stagehand.config import StageConfig
-from stagehand.stage import DeviceError, StageDriver, StageInfo, State
+from shuffler.config import StageConfig
+from shuffler.stage import DeviceError, StageDriver, StageInfo, State
 
-log = logging.getLogger("stagehand")
+log = logging.getLogger("shuffler")
 
 POLL_S = 0.1
 READ_FAILURE_LIMIT = 5

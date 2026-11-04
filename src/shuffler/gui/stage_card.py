@@ -29,12 +29,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from stagehand.axes import Axis
-from stagehand.gui import theme
-from stagehand.gui.icons import icon
-from stagehand.gui.widgets import NumberField, TitleLabel, WrapLabel
-from stagehand.stage import State
-from stagehand.worker import StageStatus, StageWorker
+from shuffler.axes import Axis
+from shuffler.gui import theme
+from shuffler.gui.icons import icon
+from shuffler.gui.widgets import NumberField, TitleLabel, WrapLabel
+from shuffler.stage import State
+from shuffler.worker import StageStatus, StageWorker
 
 BORDER = 1  # the card frame
 

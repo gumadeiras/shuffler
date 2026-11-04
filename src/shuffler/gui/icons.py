@@ -11,7 +11,7 @@ from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
-from stagehand.gui import theme
+from shuffler.gui import theme
 
 # Command name -> Tabler icon file. One family, one stroke weight.
 FILES = {

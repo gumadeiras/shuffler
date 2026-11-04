@@ -1,5 +1,5 @@
-# stagehand configuration. Copy this file to stages.toml (git-ignored) and edit it.
-# `uv run stagehand ports` lists the COM ports and Thorlabs serial numbers.
+# shuffler configuration. Copy this file to stages.toml (git-ignored) and edit it.
+# `uv run shuffler ports` lists the COM ports and Thorlabs serial numbers.
 
 [app]
 # Saved positions, relative to this file.
@@ -25,7 +25,7 @@ confirm_moves = true
 #   min, max   optional: a safe range inside the controller's travel. Moves outside
 #              it are refused. Use this to keep a stage clear of the objective.
 #   velocity   optional: a starting speed in units/s, until one is set in the window
-#   max_velocity  optional: the highest speed in units/s. stagehand never sends a
+#   max_velocity  optional: the highest speed in units/s. shuffler never sends a
 #              higher speed, and lowers the controller's speed to it when it finds it
 #              higher. Recommended for the DDS100 (its controller allows 500 mm/s).
 #   jog_steps  optional: the step sizes offered for the - and + buttons

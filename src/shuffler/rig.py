@@ -2,11 +2,11 @@
 
 from collections.abc import Callable
 
-from stagehand.conex import ConexStage
-from stagehand.config import AppConfig, StageConfig
-from stagehand.fakes import FakeStage
-from stagehand.kinesis import KinesisStage
-from stagehand.stage import StageDriver
+from shuffler.conex import ConexStage
+from shuffler.config import AppConfig, StageConfig
+from shuffler.fakes import FakeStage
+from shuffler.kinesis import KinesisStage
+from shuffler.stage import StageDriver
 
 
 def driver_factory(app: AppConfig, *, demo: bool = False) -> Callable[[StageConfig], StageDriver]:

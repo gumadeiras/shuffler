@@ -10,4 +10,4 @@ stages.toml
 presets.json
 axes.json
 *.json.tmp
-stagehand.log*
+shuffler.log*

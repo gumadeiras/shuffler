@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stagehand.axes import Axis, AxisError, AxisStore
+from shuffler.axes import Axis, AxisError, AxisStore
 
 KEYS = ("CONEX A", "CONEX B", "DDS100")
 

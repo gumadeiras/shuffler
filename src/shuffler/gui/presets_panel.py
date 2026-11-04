@@ -31,13 +31,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from stagehand.axes import Axis
-from stagehand.gui import theme
-from stagehand.gui.icons import blank, icon
-from stagehand.gui.widgets import WrapLabel
-from stagehand.presets import Preset, PresetError, PresetStore
-from stagehand.stage import State
-from stagehand.worker import StageStatus, StageWorker
+from shuffler.axes import Axis
+from shuffler.gui import theme
+from shuffler.gui.icons import blank, icon
+from shuffler.gui.widgets import WrapLabel
+from shuffler.presets import Preset, PresetError, PresetStore
+from shuffler.stage import State
+from shuffler.worker import StageStatus, StageWorker
 
 MATCH_TOLERANCE = 0.001  # a stage is "at" a preset position within this distance
 

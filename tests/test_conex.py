@@ -5,8 +5,8 @@ import unittest
 
 import serial
 
-from stagehand.conex import ConexStage, parse_status
-from stagehand.stage import DeviceError, State
+from shuffler.conex import ConexStage, parse_status
+from shuffler.stage import DeviceError, State
 
 # Commands that would change stored configuration. The driver must never send them.
 FORBIDDEN = re.compile(r"^1(PW|HT|SL-?\d|SR-?\d|OH|ZT|SA)")

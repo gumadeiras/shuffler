@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stagehand import config
-from stagehand.config import ConfigError
+from shuffler import config
+from shuffler.config import ConfigError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,7 +34,7 @@ class ConfigTest(unittest.TestCase):
 
     def test_missing_file(self) -> None:
         with self.assertRaisesRegex(ConfigError, "Copy stages.toml.example"):
-            config.load(Path(tempfile.gettempdir()) / "no-such-stagehand.toml")
+            config.load(Path(tempfile.gettempdir()) / "no-such-shuffler.toml")
 
     def test_errors(self) -> None:
         cases = {

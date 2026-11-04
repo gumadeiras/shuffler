@@ -1,4 +1,4 @@
-"""The stagehand look: the sniffler palette, spacing, and type, so the rig's apps match.
+"""The shuffler look: the sniffler palette, spacing, and type, so the rig's apps match.
 
 Pink has one meaning: live attention (a stage in motion, the Stop control while
 something moves, an error). Navy carries text and the primary controls; the cream
@@ -12,7 +12,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import QApplication
 
-from stagehand.stage import State
+from shuffler.stage import State
 
 ASSETS = Path(__file__).with_name("assets")
 
@@ -28,7 +28,7 @@ INK_SOFT = "#4f5f7a"
 DISABLED = "#5f6b85"  # darkened from sniffler's #76819a so disabled labels stay readable
 LINE = "#d9d0bf"
 GOLD = "#8a5f10"
-# Additions for stagehand, derived from the same colors.
+# Additions for shuffler, derived from the same colors.
 NAVY_WASH = "#e3e8f1"  # navy at low opacity over white: the Ready pill
 GOLD_WASH = "#fbeccc"  # cream, a little stronger: the Not homed pill
 TRACK = "#ece4d3"  # the travel bar track

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stagehand.presets import PresetError, PresetStore
+from shuffler.presets import PresetError, PresetStore
 
 
 class PresetStoreTest(unittest.TestCase):

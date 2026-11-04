@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from stagehand.axes import DIRECTIONS, MAX_LABEL, Axis
-from stagehand.gui import theme
+from shuffler.axes import DIRECTIONS, MAX_LABEL, Axis
+from shuffler.gui import theme
 
 DIRECTION_TEXT = {
     "none": "No direction words (− and +)",

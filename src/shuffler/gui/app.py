@@ -1,8 +1,8 @@
-"""The stagehand window: a card per stage, Stop all, and the presets.
+"""The shuffler window: a card per stage, Stop all, and the presets.
 
-uv run stagehand-gui                  uses stages.toml in the current folder
-uv run stagehand-gui --config FILE
-uv run stagehand-gui --demo           simulated stages; no hardware is touched
+uv run shuffler-gui                  uses stages.toml in the current folder
+uv run shuffler-gui --config FILE
+uv run shuffler-gui --demo           simulated stages; no hardware is touched
 """
 
 import argparse
@@ -28,21 +28,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from stagehand import __version__
-from stagehand import config as config_module
-from stagehand.axes import Axis, AxisError, AxisStore
-from stagehand.config import AppConfig, ConfigError
-from stagehand.gui import theme
-from stagehand.gui.axis_dialog import AxisDialog
-from stagehand.gui.icons import icon
-from stagehand.gui.presets_panel import PresetsPanel
-from stagehand.gui.stage_card import StageCard
-from stagehand.gui.widgets import ElidedLabel
-from stagehand.presets import PresetStore
-from stagehand.rig import driver_factory
-from stagehand.worker import StageWorker
+from shuffler import __version__
+from shuffler import config as config_module
+from shuffler.axes import Axis, AxisError, AxisStore
+from shuffler.config import AppConfig, ConfigError
+from shuffler.gui import theme
+from shuffler.gui.axis_dialog import AxisDialog
+from shuffler.gui.icons import icon
+from shuffler.gui.presets_panel import PresetsPanel
+from shuffler.gui.stage_card import StageCard
+from shuffler.gui.widgets import ElidedLabel
+from shuffler.presets import PresetStore
+from shuffler.rig import driver_factory
+from shuffler.worker import StageWorker
 
-log = logging.getLogger("stagehand")
+log = logging.getLogger("shuffler")
 REFRESH_MS = 100
 GEOMETRY_KEY = "window/geometry-v2"
 
@@ -89,10 +89,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.app_config = app_config
         self.workers = list(workers)
-        self.settings = settings or QSettings("ClarkLab", "stagehand")
+        self.settings = settings or QSettings("ClarkLab", "shuffler")
         keys = [w.name for w in self.workers]
         self.axes = axes or AxisStore(app_config.axes_path, keys)
-        self.setWindowTitle("stagehand" + (" (demo)" if demo else ""))
+        self.setWindowTitle("shuffler" + (" (demo)" if demo else ""))
 
         demo_badge = QLabel("DEMO · simulated stages")
         demo_badge.setObjectName("demo")
@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         self._fit_cards()
 
         where = app_config.presets_path if not demo else "a temporary file (demo)"
-        self._resting_message = f"stagehand {__version__}  ·  presets: {where}"
+        self._resting_message = f"shuffler {__version__}  ·  presets: {where}"
         self.status_label.setText(self._resting_message)
         if self.axes.load_error:
             self.say(self.axes.load_error, 60000)
@@ -321,7 +321,7 @@ class MainWindow(QMainWindow):
 
 
 def setup_logging(folder: Path | None) -> None:
-    root = logging.getLogger("stagehand")
+    root = logging.getLogger("shuffler")
     root.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s  %(levelname)-7s %(message)s")
     console = logging.StreamHandler()
@@ -330,7 +330,7 @@ def setup_logging(folder: Path | None) -> None:
     if folder is not None:
         try:
             file = RotatingFileHandler(
-                folder / "stagehand.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+                folder / "shuffler.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8"
             )
         except OSError as error:
             log.warning("No log file: %s", error)
@@ -340,13 +340,13 @@ def setup_logging(folder: Path | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="stagehand-gui", description="Motorized stage control")
+    parser = argparse.ArgumentParser(prog="shuffler-gui", description="Motorized stage control")
     parser.add_argument("--config", type=Path, default=Path("stages.toml"))
     parser.add_argument("--demo", action="store_true", help="simulated stages, no hardware")
     args = parser.parse_args(argv)
 
     application = QApplication.instance() or QApplication(sys.argv[:1])
-    application.setApplicationName("stagehand")
+    application.setApplicationName("shuffler")
     theme.apply(application)
 
     try:
@@ -355,12 +355,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             app_config = config_module.load(args.config)
     except ConfigError as error:
-        QMessageBox.critical(None, "stagehand", str(error))
+        QMessageBox.critical(None, "shuffler", str(error))
         return 2
 
     if args.demo:
-        presets_path = Path(tempfile.gettempdir()) / "stagehand-demo-presets.json"
-        axes_path = Path(tempfile.gettempdir()) / "stagehand-demo-axes.json"
+        presets_path = Path(tempfile.gettempdir()) / "shuffler-demo-presets.json"
+        axes_path = Path(tempfile.gettempdir()) / "shuffler-demo-axes.json"
         setup_logging(None)
     else:
         presets_path = app_config.presets_path

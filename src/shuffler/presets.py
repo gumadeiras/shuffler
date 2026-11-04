@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from stagehand.jsonfile import write_atomic
+from shuffler.jsonfile import write_atomic
 
 VERSION = 1
 

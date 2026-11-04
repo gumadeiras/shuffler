@@ -9,7 +9,7 @@ home search of a homed stage) restores the stored speed.
 import time
 from collections.abc import Callable
 
-from stagehand.stage import DeviceError, Reading, StageInfo, State
+from shuffler.stage import DeviceError, Reading, StageInfo, State
 
 
 class FakeStage:

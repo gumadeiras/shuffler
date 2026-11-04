@@ -11,15 +11,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-from stagehand import config
-from stagehand.axes import AxisStore
-from stagehand.fakes import FakeStage
-from stagehand.gui import theme
-from stagehand.gui.app import MainWindow
-from stagehand.gui.presets_panel import GoToPresetDialog, SavePresetDialog, at_preset
-from stagehand.presets import PresetStore
-from stagehand.stage import State
-from stagehand.worker import StageWorker
+from shuffler import config
+from shuffler.axes import AxisStore
+from shuffler.fakes import FakeStage
+from shuffler.gui import theme
+from shuffler.gui.app import MainWindow
+from shuffler.gui.presets_panel import GoToPresetDialog, SavePresetDialog, at_preset
+from shuffler.presets import PresetStore
+from shuffler.stage import State
+from shuffler.worker import StageWorker
 
 APP = QApplication.instance() or QApplication([])
 theme.apply(APP)
@@ -361,7 +361,7 @@ class WindowTest(unittest.TestCase):
     def test_cards_that_grow_after_launch_keep_their_height(self) -> None:
         """The launch that hid the Home buttons: a window opened at a remembered size that
         is tight, then the stages connect and the cards grow (speed fields fill in)."""
-        from stagehand.gui.fit import find_cropped
+        from shuffler.gui.fit import find_cropped
 
         self.window.show()
         APP.processEvents()
@@ -386,7 +386,7 @@ class WindowTest(unittest.TestCase):
             self.assertGreaterEqual(card.home_button.height(), card.home_button.sizeHint().height())
 
     def test_no_text_is_cut_at_the_smallest_window(self) -> None:
-        from stagehand.gui.fit import find_cropped
+        from shuffler.gui.fit import find_cropped
 
         self.ready()
         self.edit("X", "A rather long axis name", "back-forward", reversed=True)

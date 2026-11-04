@@ -1,4 +1,4 @@
-# stagehand
+# shuffler
 
 Simple control for the rig's motorized stages. It replaces the Newport CONEX-CC
 application (two controllers) and the Thorlabs Kinesis application (one K-Cube)
@@ -43,10 +43,10 @@ shows the port, the `stages.toml` name, and "reversed", so the mapping stays vis
 
 You need [uv](https://docs.astral.sh/uv/) and, for the K-Cube, Thorlabs Kinesis
 (64-bit) in `C:\Program Files\Thorlabs\Kinesis`. Nothing from Newport needs to be
-installed: stagehand talks to the CONEX-CC through its COM port.
+installed: shuffler talks to the CONEX-CC through its COM port.
 
 ```powershell
-cd stagehand
+cd shuffler
 uv sync
 copy stages.toml.example stages.toml   # then edit names, ports, and limits
 ```
@@ -54,14 +54,14 @@ copy stages.toml.example stages.toml   # then edit names, ports, and limits
 ## Use
 
 **Close the Newport CONEX-CC and Thorlabs Kinesis applications first.** A COM port
-or a K-Cube can be open in only one program at a time. stagehand tells you which
+or a K-Cube can be open in only one program at a time. shuffler tells you which
 program to close if it cannot connect.
 
-Double-click `stagehand.bat`, or:
+Double-click `shuffler.bat`, or:
 
 ```powershell
-uv run stagehand-gui            # uses stages.toml in this folder
-uv run stagehand-gui --demo     # simulated stages; no hardware is touched
+uv run shuffler-gui            # uses stages.toml in this folder
+uv run shuffler-gui --demo     # simulated stages; no hardware is touched
 ```
 
 1. The stages connect when the window opens.
@@ -72,7 +72,7 @@ uv run stagehand-gui --demo     # simulated stages; no hardware is touched
    size. Repeated jogs add up exactly (they continue from the last target). The bar
    under the position shows where the stage is in its travel; it is a readout only.
 4. **Speed** sets how fast moves and jogs go (mm/s), when the stage is homed and
-   still. Type a value and press **Enter** or **Set**. stagehand saves it and applies
+   still. Type a value and press **Enter** or **Set**. shuffler saves it and applies
    it again each time the stage is ready after a connect, home, or reset (the
    controllers forget it). A speed more than twice the current one asks first.
    Homing uses the controller's own homing speed. See "Speed limits" below.
@@ -91,18 +91,18 @@ uv run stagehand-gui --demo     # simulated stages; no hardware is touched
   while the controller reboots.
 - Reset is refused while the stage moves. Disabling the DDS100 in motion would let
   the carriage coast.
-- If a controller stops answering, stagehand sends a stop before it disconnects.
+- If a controller stops answering, shuffler sends a stop before it disconnects.
 - A Kinesis controller error blocks moves until you reset it.
 - Going to a preset moves the checked stages at the same time.
 - Closing the window while a stage moves asks first, then stops the stage.
-- Positions are checked twice: stagehand refuses a target outside the allowed range
+- Positions are checked twice: shuffler refuses a target outside the allowed range
   (it never clamps one silently), and the controller refuses a target outside its own
   limits (CONEX: SL/SR, error G; Kinesis: the stage travel). Presets are checked again
   when you go to them.
-- stagehand never writes controller configuration (no CONEX configuration mode, no
+- shuffler never writes controller configuration (no CONEX configuration mode, no
   home-type, stored-limit, acceleration, or homing-speed changes). On a K-Cube it loads
   the stage settings that Kinesis uses for it (DDS100) and enables the motor, as the
-  Kinesis application does. `stagehand probe` writes nothing.
+  Kinesis application does. `shuffler probe` writes nothing.
 
 ### Speed limits
 
@@ -111,24 +111,24 @@ uv run stagehand-gui --demo     # simulated stages; no hardware is touched
   in `stages.toml`, whichever is lower.
 - `max_velocity` is also enforced on the controller's own speed: when a stage is ready
   and the controller runs faster (a speed left by another program, or a CONEX's
-  stored speed after a reset), stagehand lowers it before any move. Set it for the
+  stored speed after a reset), shuffler lowers it before any move. Set it for the
   DDS100; its controller allows 500 mm/s.
 - A CONEX-CC also refuses a speed above the maximum stored in its configuration
   (manual, VA: error C). The CONEX does not report that maximum, so the first time you
   ask for too much, the controller refuses it and the speed does not change.
 - A CONEX-CC accepts a speed only when homed and still (manual, VA: errors H and M),
-  so stagehand sends it only then. Every CONEX command reads the controller's error
+  so shuffler sends it only then. Every CONEX command reads the controller's error
   register before and after it, so a refused command is reported as refused, and
   only that one.
 
 ## Diagnostics (nothing moves)
 
 ```powershell
-uv run stagehand ports    # COM ports and Thorlabs serial numbers
-uv run stagehand probe    # connect to each stage, read model, travel, position, state
+uv run shuffler ports    # COM ports and Thorlabs serial numbers
+uv run shuffler probe    # connect to each stage, read model, travel, position, state
 ```
 
-A log of every command is written to `stagehand.log` next to `stages.toml`.
+A log of every command is written to `shuffler.log` next to `stages.toml`.
 
 ## Files
 
@@ -137,13 +137,13 @@ A log of every command is written to `stagehand.log` next to `stages.toml`.
 | `stages.toml` | this rig's stages (git-ignored; start from `stages.toml.example`) |
 | `presets.json` | saved positions (git-ignored; rewritten atomically) |
 | `axes.json` | stage names, directions, Reverse, speed, and card order, set in the window (git-ignored) |
-| `src/stagehand/conex.py` | Newport CONEX-CC ASCII protocol (pyserial) |
-| `src/stagehand/kinesis.py` | Thorlabs K-Cubes (KBD101, KDC101, KST101) via Kinesis .NET |
-| `src/stagehand/worker.py` | one thread per stage; all motion rules |
-| `src/stagehand/presets.py` | preset storage |
-| `src/stagehand/axes.py` | names, directions, and the Reverse mirror |
-| `src/stagehand/gui/` | the window |
-| `src/stagehand/fakes.py` | simulated stage for `--demo` and the tests |
+| `src/shuffler/conex.py` | Newport CONEX-CC ASCII protocol (pyserial) |
+| `src/shuffler/kinesis.py` | Thorlabs K-Cubes (KBD101, KDC101, KST101) via Kinesis .NET |
+| `src/shuffler/worker.py` | one thread per stage; all motion rules |
+| `src/shuffler/presets.py` | preset storage |
+| `src/shuffler/axes.py` | names, directions, and the Reverse mirror |
+| `src/shuffler/gui/` | the window |
+| `src/shuffler/fakes.py` | simulated stage for `--demo` and the tests |
 
 ## Development
 

@@ -1,13 +1,13 @@
 # AGENTS.md
 
-`stagehand` controls the rig's motorized stages: two Newport CONEX-CC controllers
+`shuffler` controls the rig's motorized stages: two Newport CONEX-CC controllers
 (COM3, COM4) and one Thorlabs KBD101 K-Cube with a DDS100 stage (serial 28253849).
 Mass flow controllers will be added later, following sniffler's Alicat code.
 
 ## Rules
 
 - **Never move a stage while you develop or test.** No move, home, jog, reset, or enable
-  on real hardware. Read-only checks (`uv run stagehand ports`, `uv run stagehand probe`)
+  on real hardware. Read-only checks (`uv run shuffler ports`, `uv run shuffler probe`)
   are allowed. Verify motion logic with `fakes.FakeStage` and `--demo`.
 - Only the driver modules (`conex.py`, `kinesis.py`) talk to devices. Every motion rule
   (homed, idle, in range) lives in `worker.py`, so the GUI and the tests share it.
