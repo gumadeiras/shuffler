@@ -13,6 +13,23 @@ with one window.
 The look follows [sniffler](https://github.com/gumadeiras/sniffler): the same
 palette, Fusion style, and icon set.
 
+### The fly
+
+A fruit fly sits at the top left and follows the stages:
+
+| The stages | The fly |
+|---|---|
+| none connected | sleeps (z z) |
+| still | sits; after a move or a home ends, it grooms (rubs its front legs) |
+| one moves or homes | shuffles from side to side, wings buzzing, eyes and wings pink |
+| Stop all | the escape jump: it springs up with its wings out, then lands |
+
+Click it and it grooms. The fly is drawn on the GUI thread from the same status that
+the cards show; it never waits for a stage or delays a command, and it uses no CPU
+while it sits still. With Windows animation effects off (Settings > Accessibility >
+Visual effects), or `SHUFFLER_REDUCE_MOTION=1`, nothing moves: the eyes and wings
+turn pink while a stage moves.
+
 ## Hardware on this rig
 
 | Name in `stages.toml` | Controller | Connection | Stage |
@@ -143,6 +160,7 @@ A log of every command is written to `shuffler.log` next to `stages.toml`.
 | `src/shuffler/presets.py` | preset storage |
 | `src/shuffler/axes.py` | names, directions, and the Reverse mirror |
 | `src/shuffler/gui/` | the window |
+| `src/shuffler/gui/fly.py` | the fly and the window icon (drawn with QPainter, no image files) |
 | `src/shuffler/fakes.py` | simulated stage for `--demo` and the tests |
 
 ## Development
