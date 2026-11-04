@@ -6,7 +6,8 @@ with one window.
 
 - A card for each stage: the live position, a travel bar, Go to, jog − and +,
   Home, Stop, and Reset.
-- **Stop all** in the top-right corner, or press **Esc** from anywhere in the window.
+- **Stop all** in the top-right corner, or press **Esc** from anywhere in the window,
+  including an open dialog. Esc is reserved for Stop; use Cancel to close a dialog.
 - Presets: save the current positions under a name, and go back to them later.
 - Safe ranges: optional `min` and `max` for each stage. Moves outside them are refused.
 
@@ -89,8 +90,9 @@ uv run shuffler-gui --demo     # simulated stages; no hardware is touched
    size. Repeated jogs add up exactly (they continue from the last target). The bar
    under the position shows where the stage is in its travel; it is a readout only.
 4. **Speed** sets how fast moves and jogs go (mm/s), when the stage is homed and
-   still. Type a value and press **Enter** or **Set**. shuffler saves it and applies
-   it again each time the stage is ready after a connect, home, or reset (the
+   still. Type a value and press **Enter** or **Set**. After the controller accepts
+   the speed, shuffler saves it and applies it again each time the stage is ready
+   after a connect, home, or reset (the
    controllers forget it). A speed more than twice the current one asks first.
    Homing uses the controller's own homing speed. See "Speed limits" below.
 5. **Presets → Save current…** stores the positions of the stages you pick. A pin
@@ -109,9 +111,17 @@ uv run shuffler-gui --demo     # simulated stages; no hardware is touched
 - Reset is refused while the stage moves. Disabling the DDS100 in motion would let
   the carriage coast.
 - If a controller stops answering, shuffler sends a stop before it disconnects.
+  New motion commands are blocked after a failed poll until a reading succeeds.
+  The card controls and preset preview show the same block. Stale positions are
+  not offered for saving or used to mark the current preset.
 - A Kinesis controller error blocks moves until you reset it.
-- Going to a preset moves the checked stages at the same time.
+- Going to a preset sends moves to the checked stages without waiting for one move
+  to finish before sending the next. Each stage is checked again after confirmation
+  and by its worker before it moves. A blocked stage is skipped; a later failure can
+  stop one stage from moving while others move. Presets do not guarantee that every
+  checked stage will move.
 - Closing the window while a stage moves asks first, then stops the stage.
+  Stops are queued for every stage before the window waits for any worker to close.
 - Positions are checked twice: shuffler refuses a target outside the allowed range
   (it never clamps one silently), and the controller refuses a target outside its own
   limits (CONEX: SL/SR, error G; Kinesis: the stage travel). Presets are checked again
@@ -130,6 +140,17 @@ uv run shuffler-gui --demo     # simulated stages; no hardware is touched
   and the controller runs faster (a speed left by another program, or a CONEX's
   stored speed after a reset), shuffler lowers it before any move. Set it for the
   DDS100; its controller allows 500 mm/s.
+- When a speed ceiling is set, moves are blocked until the controller reports a
+  positive speed within that ceiling. If the speed cannot be read or lowered, set a
+  valid speed before moving. The speed field remains available for this recovery.
+- If a speed reading fails, shuffler tries to read it again once per second while
+  the stage is ready. These retries do not change the speed. When a valid reading
+  returns, the move controls and preset preview use it at the next window refresh.
+  A failed read after an accepted startup speed does not replace that speed with
+  `max_velocity`; moves stay blocked until the speed is verified.
+- A saved speed in `axes.json` takes precedence over `velocity` in `stages.toml`.
+  A configured startup speed is saved only after the controller accepts it. A refused
+  startup value does not become a saved override of later configuration changes.
 - A CONEX-CC also refuses a speed above the maximum stored in its configuration
   (manual, VA: error C). The CONEX does not report that maximum, so the first time you
   ask for too much, the controller refuses it and the speed does not change.
@@ -163,6 +184,11 @@ A log of every command is written to `shuffler.log` next to `stages.toml`.
 | `src/shuffler/gui/fly.py` | the fly and the window icon (drawn with QPainter, no image files) |
 | `src/shuffler/fakes.py` | simulated stage for `--demo` and the tests |
 
+Invalid settings and preset files are kept unchanged and cannot be written until
+they are repaired or moved away. Values must use their JSON types: for example,
+`"reversed": false`, with no quotes around `false`. Preset positions must be finite
+numbers, preset names must be unique, and the card order cannot repeat a stage.
+
 ## Development
 
 ```powershell
@@ -175,6 +201,23 @@ uv run python -m unittest discover -s tests
 The tests use simulated stages and the offscreen Qt platform. They never open a port.
 `gui/fit.py` checks that no text is cut and no control reaches outside its card; a
 test runs it at the smallest window size.
+
+### Command and status flow
+
+`config.py` reads `stages.toml`. `rig.py` selects a driver, and one `StageWorker`
+owns each driver on its own thread. Only the drivers communicate with hardware.
+
+The card converts displayed targets and jog directions to controller coordinates
+once, then queues the command. Presets already contain controller coordinates.
+The worker checks each command immediately before sending it to the driver. Stop
+sets the abort flag, removes queued motion commands, and queues a stop.
+
+After each command, or about every 100 ms when idle, the worker reads the controller
+and publishes an immutable `StageStatus`. It includes contact validity, the effective
+speed ceiling, the last accepted speed request, and the shared motion-blocking
+reason. The window reads these snapshots every 100 ms to update the cards, presets,
+and fly. It saves accepted speed requests, not pending startup values or speed
+readbacks. Unknown speeds retry on a separate one-second deadline in the worker.
 
 ### Adding the mass flow controllers later
 
