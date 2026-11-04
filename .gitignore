@@ -4,10 +4,5 @@ __pycache__/
 .ruff_cache/
 dist/
 
-# Machine-specific: copy stages.toml.example to stages.toml and edit it.
-stages.toml
-# Saved positions belong to this rig, not to the repository.
-presets.json
-axes.json
 *.json.tmp
 shuffler.log*

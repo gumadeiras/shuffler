@@ -1,4 +1,4 @@
-# shuffler configuration. Copy this file to stages.toml (git-ignored) and edit it.
+# Template for another rig. Set its connections and limits before use.
 # `uv run shuffler ports` lists the COM ports and Thorlabs serial numbers.
 
 [app]

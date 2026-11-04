@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "name": "left forward down",
+      "positions": {
+        "CONEX A": -0.0,
+        "CONEX B": -0.0,
+        "DDS100": 0.0
+      },
+      "saved": "2026-11-03T16:47:28"
+    },
+    {
+      "name": "left back down",
+      "positions": {
+        "CONEX A": 24.9999967,
+        "CONEX B": -0.0,
+        "DDS100": 0.0
+      },
+      "saved": "2026-11-04T13:51:14"
+    },
+    {
+      "name": "left back up",
+      "positions": {
+        "CONEX A": 24.9999967,
+        "CONEX B": 24.9999837,
+        "DDS100": 0.0
+      },
+      "saved": "2026-11-04T13:51:37"
+    }
+  ]
+}

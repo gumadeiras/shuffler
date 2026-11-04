@@ -66,8 +66,12 @@ installed: shuffler talks to the CONEX-CC through its COM port.
 ```powershell
 cd shuffler
 uv sync
-copy stages.toml.example stages.toml   # then edit names, ports, and limits
 ```
+
+The repository includes this rig's settings, axis directions, and saved positions.
+Check `stages.toml`, `axes.json`, and `presets.json` before you connect.
+For another rig, use `stages.toml.example` as the template and set its own ports,
+serial numbers, axis settings, and presets.
 
 ## Use
 
@@ -215,9 +219,9 @@ error is named instead of the controller's "command not allowed".
 
 | Path | Purpose |
 |---|---|
-| `stages.toml` | this rig's stages (git-ignored; start from `stages.toml.example`) |
-| `presets.json` | saved positions (git-ignored; rewritten atomically) |
-| `axes.json` | stage names, directions, Reverse, speed, and card order, set in the window (git-ignored) |
+| `stages.toml` | this rig's controller connections and settings (tracked) |
+| `presets.json` | this rig's saved positions (tracked; rewritten atomically) |
+| `axes.json` | stage names, directions, Reverse, speed, and card order, set in the window (tracked) |
 | `src/shuffler/conex.py` | Newport CONEX-CC ASCII protocol (pyserial) |
 | `src/shuffler/kinesis.py` | Thorlabs K-Cubes (KBD101, KDC101, KST101) via Kinesis .NET |
 | `src/shuffler/worker.py` | one thread per stage; all motion rules |
@@ -226,6 +230,9 @@ error is named instead of the controller's "command not allowed".
 | `src/shuffler/gui/` | the window |
 | `src/shuffler/gui/fly.py` | the fly and the window icon (drawn with QPainter, no image files) |
 | `src/shuffler/fakes.py` | simulated stage for `--demo` and the tests |
+
+The app updates `axes.json` and `presets.json` when you save changes in the window.
+Review those changes before you commit them.
 
 Invalid settings and preset files are kept unchanged and cannot be written until
 they are repaired or moved away. Values must use their JSON types: for example,

@@ -1,6 +1,6 @@
 """``stages.toml``: which stages exist, how to reach them, and their safe ranges.
 
-The file is machine-specific and git-ignored. Copy ``stages.toml.example`` to start.
+The repository tracks this rig's settings. Use ``stages.toml.example`` for another rig.
 Unknown keys are errors, so a typo cannot silently drop a safety limit.
 """
 
