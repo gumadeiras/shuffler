@@ -162,6 +162,34 @@ class WindowTest(unittest.TestCase):
                 APP.processEvents()
                 self.assertFalse(box.hasSelectedText())
 
+    def test_connecting_and_disconnecting_keep_every_size(self) -> None:
+        """Disconnecting made every card wider (Connect, Home, and Stop all counted for a
+        moment) and the window grew; the subtitle and travel ends changed the height."""
+        self.window.show()
+        APP.processEvents()
+
+        def sizes() -> list[tuple[int, int]]:
+            APP.processEvents()
+            return [(c.width(), c.height()) for c in self.window.cards] + [
+                (self.window.width(), self.window.height())
+            ]
+
+        offline = sizes()
+        self.ready()
+        steps = {"ready": sizes()}
+        self.workers[0].disconnect()
+        self.run_all()
+        steps["one disconnected"] = sizes()
+        self.window.disconnect_all()
+        self.run_all()
+        steps["all disconnected"] = sizes()
+        self.window.connect_all()
+        self.run_all()
+        steps["reconnected"] = sizes()
+        for step, measured in steps.items():
+            with self.subTest(step=step):
+                self.assertEqual(measured, offline)
+
     def test_connect_all_becomes_disconnect_all(self) -> None:
         button = self.window.connect_all_button
         self.assertEqual(button.text(), "Connect all")

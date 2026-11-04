@@ -137,6 +137,8 @@ class StageCard(QFrame):
         self._confirm = confirm_moves
         self._status: StageStatus | None = None
         self._was_ready = False
+        # The controller model, kept while offline so the subtitle keeps its two lines.
+        self._model = "Newport CONEX-CC" if self.config.driver == "conex" else "Thorlabs K-Cube"
         self.setObjectName("card")
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
         unit = self.config.units
@@ -174,7 +176,7 @@ class StageCard(QFrame):
         # Go to a target.
         self.target_box = NumberField(self.config.decimals, unit, "Target")
         self.target_box.returnPressed.connect(self._go)
-        target_unit = QLabel(unit)
+        self._target_unit = target_unit = QLabel(unit)
         target_unit.setObjectName("secondary")
         self.go_button = QPushButton(icon("go", theme.PANEL), "Go")
         self.go_button.setObjectName("primary")
@@ -199,12 +201,12 @@ class StageCard(QFrame):
         )
 
         # Speed.
-        speed_label = QLabel("Speed")
+        self._speed_label = speed_label = QLabel("Speed")
         speed_label.setObjectName("secondary")
         self.speed_box = NumberField(3, f"{unit}/s", "Speed")
         self.speed_box.returnPressed.connect(self._set_speed)
         self.speed_box.textEdited.connect(self._update_speed_button)
-        speed_unit = QLabel(f"{unit}/s")
+        self._speed_unit = speed_unit = QLabel(f"{unit}/s")
         speed_unit.setObjectName("secondary")
         self.speed_button = QPushButton("Set")
         self.speed_button.setToolTip("Use this speed for the next moves.")
@@ -287,7 +289,14 @@ class StageCard(QFrame):
     # -- size -------------------------------------------------------------------------------
 
     def needed_width(self) -> int:
-        """The card width that the controls need. Wrapped text never adds to it."""
+        """The card width that the controls need, the same in every state.
+
+        Computed from each control's own size hint, never from the card layout: when a
+        card goes offline or comes back, Connect is shown and Home and Stop are hidden in
+        one update, and the layout's minimum, read before the layout caught up, counted
+        all three. Every card widened, and the window grew with them. The action row
+        counts the wider of its two forms. Wrapped text never adds to the width.
+        """
         controls = (
             self.back_button,
             self.forward_button,
@@ -301,8 +310,36 @@ class StageCard(QFrame):
         )
         for widget in controls:  # a row never squeezes a control below its text
             widget.setMinimumWidth(widget.sizeHint().width())
-        layout = self.layout()
-        return max(theme.CARD_WIDTH, layout.minimumSize().width())
+
+        def hint(widget: QWidget) -> int:
+            return widget.sizeHint().width()  # also right for a hidden widget
+
+        def row(*widths: int) -> int:
+            return sum(widths) + theme.GAP * (len(widths) - 1)
+
+        rows = (
+            row(self._widest_position(), hint(self.unit_label)),
+            row(hint(self.low_label), hint(self.high_label)),
+            row(self.target_box.minimumWidth(), hint(self._target_unit), hint(self.go_button)),
+            row(hint(self.back_button), hint(self.step_box), hint(self.forward_button)),
+            row(
+                hint(self._speed_label),
+                self.speed_box.minimumWidth(),
+                hint(self._speed_unit),
+                hint(self.speed_button),
+            ),
+            row(
+                max(hint(self.connect_button), row(hint(self.home_button), hint(self.stop_button))),
+                hint(self.more_button),
+            ),
+        )
+        return max(theme.CARD_WIDTH, max(rows) + 2 * (theme.MARGIN + BORDER))
+
+    def _widest_position(self) -> int:
+        """The width of the longest position this stage can show (a sign, its travel)."""
+        reach = max((abs(v) for v in self.axis.travel or ()), default=999.0)
+        sample = f"-{reach:.{self.config.decimals}f}"  # a monospace font: digits are equal
+        return self.position_label.fontMetrics().horizontalAdvance(sample)
 
     def set_card_width(self, width: int) -> None:
         if self.minimumWidth() == width == self.maximumWidth():
@@ -351,15 +388,22 @@ class StageCard(QFrame):
         self.unit_label.setVisible(position is not None)
         self.detail_label.setText(self._detail(status))
 
+        negative, positive = axis.words
         if info is not None:
             travel = axis.display_range(info.lower, info.upper)
             allowed = axis.display_range(*status.allowed) if status.allowed else None
             low, high = allowed or travel
-            negative, positive = axis.words
             self.low_label.setText(self._end(f"{low:g}", negative, left=True))
             self.high_label.setText(self._end(f"{high:g} {units}", positive, left=False))
             self.target_box.setRange(low, high)
             self.bar.travel, self.bar.allowed = travel, allowed
+        elif axis.travel is not None:
+            # Offline: the travel saved from the last connection, so the ends keep their
+            # text and the card keeps its height. The bar stays empty.
+            low, high = axis.display_range(*axis.travel)
+            self.low_label.setText(self._end(f"{low:g}", negative, left=True))
+            self.high_label.setText(self._end(f"{high:g} {units}", positive, left=False))
+            self.bar.travel = self.bar.allowed = None
         else:
             self.low_label.setText(" ")
             self.high_label.setText(" ")
@@ -453,7 +497,9 @@ class StageCard(QFrame):
         if self.axis.mirrored:
             parts.append("reversed")
         line = "  ·  ".join(parts)
-        return f"{status.info.model}\n{line}" if status.info else line
+        if status.info is not None:
+            self._model = status.info.model
+        return f"{self._model}\n{line}"
 
     def _detail(self, status: StageStatus) -> str:
         """One short line that says what the stage is doing or needs."""
