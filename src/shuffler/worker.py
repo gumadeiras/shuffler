@@ -178,8 +178,8 @@ class StageWorker:
         if name == "quit":
             self._quit.set()
             return
-        if name in MOTION or name == "connect":
-            self._abort.clear()  # a Stop pressed before this command does not cancel it
+        if name in MOTION and self._abort.is_set():
+            return  # Stop can arrive after the command leaves the queue.
         if name not in ("stop", "disconnect"):
             self._set(error="")
         try:
@@ -356,6 +356,7 @@ class StageWorker:
         log.info("%s: home search", self._who)
 
     def _do_stop(self) -> None:
+        self._abort.clear()
         if self._driver is None:
             return
         self._latch = None

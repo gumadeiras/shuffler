@@ -1,6 +1,7 @@
 """The worker rules that protect the hardware, with a simulated stage and clock."""
 
 import unittest
+from unittest import mock
 
 from shuffler.config import StageConfig
 from shuffler.fakes import FakeStage
@@ -161,6 +162,26 @@ class WorkerTest(unittest.TestCase):
         self.assertNotIn("move_to 20", stage.commands)
         self.assertNotIn("move_to 5", stage.commands)
         self.assertEqual(stage.commands[-1], "stop")
+
+    def test_stop_cancels_a_command_already_taken_from_the_queue(self) -> None:
+        worker, stage = self.connected_and_homed()
+        get_command = worker._get_nowait
+
+        def stop_after_dequeue():
+            command = get_command()
+            worker.stop()
+            return command
+
+        for command in (worker.move_to, worker.move_by):
+            with self.subTest(command=command.__name__):
+                command(5.0)
+                with mock.patch.object(worker, "_get_nowait", side_effect=stop_after_dequeue):
+                    worker.tick(0)
+                self.run_all(worker)
+        self.assertFalse(any(c.startswith("move_to") for c in stage.commands))
+        worker.move_to(5.0)  # a new command after Stop must still work
+        self.run_all(worker)
+        self.assertIn("move_to 5", stage.commands)
 
     def test_stop_during_a_move(self) -> None:
         worker, _stage = self.connected_and_homed()

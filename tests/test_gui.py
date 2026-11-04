@@ -8,7 +8,8 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings, QSize
+from PySide6.QtCore import QSettings, QSize, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from shuffler import config
@@ -184,6 +185,37 @@ class WindowTest(unittest.TestCase):
         self.run_all()
         for fake in self.fakes.values():
             self.assertIn("stop", fake.commands)
+
+    def test_escape_stops_all_stages_with_a_modal_dialog_open(self) -> None:
+        self.window.show()
+        APP.processEvents()
+        self.ready()
+        dialog = GoToPresetDialog(
+            self.store.save("Rest", {"X": 0.0}),
+            {w.name: w.status for w in self.workers},
+            self.window,
+        )
+        dialog.open()
+        APP.processEvents()
+        QTest.keyClick(dialog.move_button, Qt.Key_Escape)
+        self.run_all()
+        for fake in self.fakes.values():
+            self.assertIn("stop", fake.commands)
+        dialog.reject()
+
+    def test_close_queues_every_stop_before_waiting_for_any_worker(self) -> None:
+        self.ready()
+        first = self.workers[0]
+        shutdown = first.shutdown
+
+        def check_stops():
+            self.assertTrue(all(w._abort.is_set() for w in self.workers))
+            shutdown()
+
+        with mock.patch.object(first, "shutdown", side_effect=check_stops):
+            self.window.close()
+        for fake in self.fakes.values():
+            self.assertEqual(fake.commands[-2:], ["stop", "close"])
 
     # -- presets ----------------------------------------------------------------------------
 

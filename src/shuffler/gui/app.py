@@ -14,8 +14,8 @@ from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -105,12 +105,8 @@ class MainWindow(QMainWindow):
         self.stop_all_button.setObjectName("stopAll")
         self.stop_all_button.setToolTip("Stop every stage now. Esc does the same from anywhere.")
         self.stop_all_button.clicked.connect(self.stop_all)
-        QShortcut(
-            QKeySequence(Qt.Key_Escape),
-            self,
-            activated=self.stop_all,
-            context=Qt.ApplicationShortcut,
-        )
+        # Qt suppresses window shortcuts while a modal dialog is open.
+        QApplication.instance().installEventFilter(self)
 
         self.cards = [
             StageCard(w, confirm_moves=app_config.confirm_moves, settings=self.settings)
@@ -306,6 +302,21 @@ class MainWindow(QMainWindow):
         self.say("Stop sent to every stage.", 5000)
         log.info("stop all")
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.KeyPress
+            and isinstance(event, QKeyEvent)
+            and event.key() == Qt.Key_Escape
+            and isinstance(watched, QWidget)
+        ):
+            widget = watched
+            while widget is not None:
+                if widget is self:
+                    self.stop_all()
+                    return True
+                widget = widget.parentWidget()
+        return super().eventFilter(watched, event)
+
     def closeEvent(self, event: QCloseEvent) -> None:
         if any(w.status.state.busy for w in self.workers):
             answer = QMessageBox.question(
@@ -320,6 +331,7 @@ class MainWindow(QMainWindow):
                 return
         self.timer.stop()
         self.settings.setValue(GEOMETRY_KEY, self.saveGeometry())
+        self.stop_all()
         for worker in self.workers:
             worker.shutdown()  # stops a moving stage, then disconnects
         event.accept()
