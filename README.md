@@ -191,6 +191,10 @@ numbers, preset names must be unique, and the card order cannot repeat a stage.
 
 ## Development
 
+The GUI uses `PySide6-Essentials`, which supplies all Qt modules used by the app
+and tests, including SVG rendering. This keeps unused Qt add-ons, PDF, and browser
+engine packages out of the environment.
+
 ```powershell
 uv sync --group dev
 uv run ruff check .
