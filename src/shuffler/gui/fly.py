@@ -36,6 +36,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
     QPixmap,
+    QTransform,
 )
 from PySide6.QtWidgets import QWidget
 
@@ -255,7 +256,8 @@ def _ico_bitmap(image: QImage) -> bytes:
     """One .ico bitmap: a BITMAPINFOHEADER (double height: color + mask), BGRA rows
     bottom-up with straight alpha, then an all-zero 1-bit mask (the alpha decides)."""
     size = image.width()
-    rows = image.convertToFormat(QImage.Format_ARGB32).flipped(Qt.Vertical)
+    # A transform supports Qt 6.8 without deprecated image APIs.
+    rows = image.convertToFormat(QImage.Format_ARGB32).transformed(QTransform.fromScale(1, -1))
     color = bytes(rows.constBits())[: size * size * 4]  # ARGB32 is B, G, R, A in memory
     mask = bytes(((size + 31) // 32) * 4 * size)
     header = struct.pack(
