@@ -72,11 +72,11 @@ def at_preset(preset: Preset, statuses: dict[str, StageStatus]) -> bool:
         if (
             status is None
             or not status.contact_ok
-            or status.position is None
+            or status.known_position is None
             or not status.state.connected
         ):
             return False
-        if abs(status.position - value) > MATCH_TOLERANCE:
+        if abs(status.known_position - value) > MATCH_TOLERANCE:
             return False
     return True
 
@@ -211,9 +211,9 @@ class GoToPresetDialog(QDialog):
                 if status is None
                 else blocked_reason(status, target, view)
             )
-            known = status is not None and status.position is not None
-            now = view.text(status.position) if known else "—"
-            change = view.change(status.position, target) if known else ""
+            position = None if status is None else status.known_position
+            now = "—" if position is None else view.text(position)
+            change = "" if position is None else view.change(position, target)
             if reason:
                 check.setEnabled(False)
             else:

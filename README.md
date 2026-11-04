@@ -102,7 +102,10 @@ uv run shuffler-gui --demo     # simulated stages; no hardware is touched
    asks first if a stage is moving, and stops it before it disconnects).
 2. A stage that shows **Not homed** must be homed before it can move. Home moves the
    stage to its home position at one end of its travel, so check that the path is
-   clear. A CONEX-CC loses its home after power-off or a reset.
+   clear. A CONEX-CC loses its home after power-off or a reset. Until homing
+   finishes, the position shows **—**: the controller's count means nothing yet (it
+   starts from wherever the reset left it, and can read 35 on a 25 mm stage during
+   the home search). `shuffler.log` still records the raw count.
 3. Type a target and press **Enter** (or **Go**), or use **−** and **+** with a step
    size. Repeated jogs add up exactly (they continue from the last target). The bar
    under the position shows where the stage is in its travel; it is a readout only.

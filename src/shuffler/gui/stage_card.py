@@ -383,8 +383,16 @@ class StageCard(QFrame):
         self.pill.setStyleSheet(theme.pill_style(state))
         self.model_label.setText(self._identity(status))
 
-        position = None if status.position is None else axis.to_display(status.position)
+        # Before and during homing the controller's count is not a real position, so the
+        # card shows a dash instead of a number that jumps around (known_position).
+        known = status.known_position
+        position = None if known is None else axis.to_display(known)
         self.position_label.setText("—" if position is None else self._fmt(position))
+        self.position_label.setToolTip(
+            "The position is unknown until the stage is homed."
+            if state in (State.NOT_HOMED, State.HOMING)
+            else ""
+        )
         self.unit_label.setVisible(position is not None)
         self.detail_label.setText(self._detail(status))
 

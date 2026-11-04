@@ -137,7 +137,9 @@ class WindowTest(unittest.TestCase):
         self.assertFalse(card.go_button.isEnabled())
         self.assertTrue(card.home_button.isEnabled())
         self.assertEqual(card.home_button.objectName(), "primary")
-        self.assertEqual(card.position_label.text(), "12.5000")
+        self.assertEqual(card.position_label.text(), "—", "the controller reads 12.5, unreferenced")
+        self.assertTrue(card.unit_label.isHidden())
+        self.assertIsNone(card.bar.position)
 
     def test_a_click_in_a_number_field_selects_the_value(self) -> None:
         from PySide6.QtTest import QTest
@@ -247,8 +249,13 @@ class WindowTest(unittest.TestCase):
         card.home_button.click()
         self.run_all()
         self.assertEqual(card.pill.text(), "Homing")
+        # The count during a home search is not a position (it can read 35 on a 25 mm
+        # stage), so the card shows none until homing is done.
+        self.assertEqual(card.position_label.text(), "—")
+        self.assertIsNone(card.bar.position)
         self.settle()
         self.assertEqual(card.pill.text(), "Ready")
+        self.assertEqual(card.position_label.text(), "0.0000")
         self.assertEqual(card.target_box.text(), "0.0000", "the field starts at the position")
         self.assertEqual(card.target_box.maximum(), 20.0, "the configured max narrows the range")
         card.target_box.setValue(7.25)
@@ -331,6 +338,13 @@ class WindowTest(unittest.TestCase):
         self.store.save(dialog.name(), dialog.positions())
         self.window.presets.refresh(select="Rest")
         self.assertTrue(at_preset(self.store.get("Rest"), statuses))
+        unreferenced = {
+            name: replace(status, state=State.NOT_HOMED) for name, status in statuses.items()
+        }
+        self.assertFalse(
+            at_preset(self.store.get("Rest"), unreferenced),
+            "an unhomed count of 0 is not the saved 0",
+        )
 
         self.store.save("Far", {"X": 30.0, "Z": 60.0})  # X is outside its configured max
         go = GoToPresetDialog(self.store.get("Far"), statuses, self.window)

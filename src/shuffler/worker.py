@@ -59,6 +59,18 @@ class StageStatus:
     accepted_speed: float | None = None  # last speed request the controller accepted
 
     @property
+    def known_position(self) -> float | None:
+        """The position, or None while it means nothing: before and during homing.
+
+        Until a home search finishes, the controller counts from wherever it was reset,
+        so the number can be far outside the travel (a reversed CONEX-CC that homes
+        toward 0 reads 25 + the distance travelled). It becomes real when homing ends.
+        """
+        if self.state in (State.NOT_HOMED, State.HOMING):
+            return None
+        return self.position
+
+    @property
     def ready_block_reason(self) -> str:
         """Why commands that need a homed, idle stage must wait."""
         if not self.state.connected:
