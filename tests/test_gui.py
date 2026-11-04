@@ -139,6 +139,29 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(card.home_button.objectName(), "primary")
         self.assertEqual(card.position_label.text(), "12.5000")
 
+    def test_a_click_in_a_number_field_selects_the_value(self) -> None:
+        from PySide6.QtTest import QTest
+
+        self.window.show()
+        self.window.activateWindow()
+        APP.processEvents()
+        self.ready()
+        card = self.card("X")
+        for box in (card.target_box, card.speed_box):
+            with self.subTest(box=box.placeholderText()):
+                self.window.setFocus()  # out of the field
+                APP.processEvents()
+                self.assertTrue(box.text(), "the field shows a value")
+                QTest.mouseClick(box, Qt.LeftButton)
+                APP.processEvents()
+                self.assertTrue(box.hasFocus())
+                self.assertEqual(box.selectedText(), box.text(), "typing replaces the value")
+                QTest.keyClicks(box, "7")
+                self.assertEqual(box.text(), "7")
+                QTest.mouseClick(box, Qt.LeftButton)  # a second click places the cursor
+                APP.processEvents()
+                self.assertFalse(box.hasSelectedText())
+
     def test_connect_all_becomes_disconnect_all(self) -> None:
         button = self.window.connect_all_button
         self.assertEqual(button.text(), "Connect all")

@@ -8,8 +8,8 @@ buttons. ``WrapLabel`` wraps at a width that its owner sets and reports an ordin
 size hint, so the layout keeps every minimum.
 """
 
-from PySide6.QtCore import QLocale, QSize, Qt, Signal
-from PySide6.QtGui import QDoubleValidator, QMouseEvent, QResizeEvent
+from PySide6.QtCore import QLocale, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QDoubleValidator, QFocusEvent, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import QLabel, QLineEdit, QSizePolicy, QWidget
 
 from shuffler.gui import theme
@@ -120,6 +120,22 @@ class NumberField(QLineEdit):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         sample = "-0000." + "0" * decimals
         self.setMinimumWidth(self.fontMetrics().horizontalAdvance(sample) + 22)
+
+    def focusInEvent(self, event: QFocusEvent) -> None:
+        """Select the whole value when a click or Tab enters the field: typing replaces it.
+
+        A second click in the field places the cursor as usual. The selection waits for
+        the event loop: the mouse press that gave the focus would otherwise put the
+        cursor back and clear it.
+        """
+        super().focusInEvent(event)
+        if event.reason() in (
+            Qt.MouseFocusReason,
+            Qt.TabFocusReason,
+            Qt.BacktabFocusReason,
+            Qt.ShortcutFocusReason,
+        ):
+            QTimer.singleShot(0, self.selectAll)
 
     def setRange(self, low: float, high: float, what: str = "a target") -> None:
         self._range = (low, high)
