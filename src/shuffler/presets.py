@@ -55,7 +55,9 @@ class PresetStore:
             raise PresetError("A preset needs the position of at least one stage.")
         for stage, value in positions.items():
             if not math.isfinite(value):
-                raise PresetError(f"The position of {stage} is not a number.")
+                raise PresetError(
+                    f"The position of {stage} is not a number. Wait for a reading, then save again."
+                )
         preset = Preset(name, dict(positions), datetime.now().isoformat(timespec="seconds"))
         updated = list(self.presets)
         index = next((i for i, p in enumerate(updated) if p.name == name), None)
@@ -97,7 +99,10 @@ class PresetStore:
         except FileNotFoundError:
             return []
         except (OSError, UnicodeError) as error:
-            raise PresetError(f"Cannot read {self.path}: {error}") from None
+            raise PresetError(
+                f"Cannot read {self.path}: {error}. Check that the file is not open in another "
+                "program, then restart shuffler."
+            ) from None
         try:
             data = json.loads(text)
             presets = []
@@ -124,7 +129,8 @@ class PresetStore:
         ) as error:
             raise PresetError(
                 f"{self.path.name} is damaged ({error}). Presets are read-only until the "
-                "file is repaired or moved away."
+                "file is repaired or moved away. Fix it in a text editor, or move it out of the "
+                "folder and shuffler starts an empty one."
             ) from None
         return presets
 
@@ -140,7 +146,10 @@ class PresetStore:
         try:
             write_atomic(self.path, data)
         except OSError as error:
-            raise PresetError(f"Cannot save presets to {self.path}: {error}") from None
+            raise PresetError(
+                f"Cannot save presets to {self.path}: {error}. Check that the folder can be "
+                "written and the file is not open in another program."
+            ) from None
         self.presets = presets
 
 

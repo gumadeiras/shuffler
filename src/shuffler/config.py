@@ -44,7 +44,7 @@ class AppConfig:
     presets_path: Path
     axes_path: Path
     kinesis_dir: Path = DEFAULT_KINESIS_DIR
-    connect_on_start: bool = True
+    connect_on_start: bool = False
     confirm_moves: bool = True
     source: Path | None = None
     stage_names: tuple[str, ...] = field(init=False)
@@ -78,11 +78,16 @@ def load(path: Path) -> AppConfig:
             "Copy stages.toml.example to stages.toml and edit it."
         ) from None
     except (OSError, UnicodeError) as error:
-        raise ConfigError(f"Cannot read {path}: {error}") from None
+        raise ConfigError(
+            f"Cannot read {path}: {error}. Check that the file is not open in another program."
+        ) from None
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
-        raise ConfigError(f"{path.name} is not valid TOML: {error}") from None
+        raise ConfigError(
+            f"{path.name} is not valid TOML: {error}. Fix that line; stages.toml.example "
+            "shows the format."
+        ) from None
     return parse(data, base=path.parent, source=path)
 
 
@@ -115,7 +120,7 @@ def parse(data: dict[str, Any], *, base: Path, source: Path | None = None) -> Ap
         presets_path=presets if presets.is_absolute() else base / presets,
         axes_path=axes if axes.is_absolute() else base / axes,
         kinesis_dir=kinesis_dir,
-        connect_on_start=_bool(app, "connect_on_start", "[app]", default=True),
+        connect_on_start=_bool(app, "connect_on_start", "[app]", default=False),
         confirm_moves=_bool(app, "confirm_moves", "[app]", default=True),
         source=source,
     )
@@ -187,7 +192,10 @@ def _stage(raw: Any, index: int) -> StageConfig:
 def _no_unknown(table: dict[str, Any], allowed: set[str], where: str) -> None:
     unknown = sorted(set(table) - allowed)
     if unknown:
-        raise ConfigError(f"Unknown setting in {where}: {', '.join(unknown)}.")
+        raise ConfigError(
+            f"Unknown setting in {where}: {', '.join(unknown)}. Check the spelling; "
+            "stages.toml.example lists every setting."
+        )
 
 
 def _string(table: dict[str, Any], key: str, where: str, *, default: str | None = None) -> str:

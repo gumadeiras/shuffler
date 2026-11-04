@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -90,7 +91,7 @@ def blocked_reason(status: StageStatus, target: float, view: View | None = None)
     low, high = status.allowed
     if not low - TOLERANCE <= target <= high + TOLERANCE:
         shown = view.range_text(low, high)
-        return f"outside {shown}"
+        return f"outside {shown}. Check min and max in stages.toml, or save the preset again"
     return ""
 
 
@@ -205,7 +206,11 @@ class GoToPresetDialog(QDialog):
             view = views[name]
             check = QCheckBox(view.label)
             status = statuses.get(name)
-            reason = "not in this rig" if status is None else blocked_reason(status, target, view)
+            reason = (
+                "not in this rig (not in stages.toml)"
+                if status is None
+                else blocked_reason(status, target, view)
+            )
             known = status is not None and status.position is not None
             now = view.text(status.position) if known else "—"
             change = view.change(status.position, target) if known else ""
@@ -222,19 +227,28 @@ class GoToPresetDialog(QDialog):
                 cell.setFont(theme.number_font(theme.BODY_PX))
                 cell.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 grid.addWidget(cell, row, column)
-            last = QLabel(reason or change)
-            last.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             if reason:
+                # A reason can be long (a hardware fault says what to do): wrap it.
+                last = WrapLabel(reason)
                 last.setObjectName("error")
+                last.ensurePolished()  # the bold error font, before it is measured
+                # As wide as the text, up to 260 px; the column keeps that width.
+                width = min(260, last.fontMetrics().horizontalAdvance(reason) + 8)
+                last.set_wrap_width(width)
+                last.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)  # widen the column
             else:
+                last = QLabel(change)
                 last.setFont(theme.number_font(theme.BODY_PX))
+            last.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             grid.addWidget(last, row, 3)
 
-        note = QLabel(
+        # WrapLabel, not a word-wrapped QLabel: that would put the dialog in height-for-
+        # width mode and squeeze the grid (see gui/widgets.py).
+        note = WrapLabel(
             "Each stage is checked again before it moves. Make sure their paths are clear."
         )
         note.setObjectName("secondary")
-        note.setWordWrap(True)
+        note.set_wrap_width(420)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
         self.move_button = self.buttons.addButton("Move", QDialogButtonBox.AcceptRole)
         self.move_button.setObjectName("primary")
@@ -513,7 +527,12 @@ class PresetsPanel(QFrame):
             if not blocked_reason(self.workers[stage].status, target, views[stage])
         }
         if not targets:
-            QMessageBox.information(self, "Go to preset", "No stage in this preset can move now.")
+            QMessageBox.information(
+                self,
+                "Go to preset",
+                "No stage in this preset can move now. Connect and home the stages, then "
+                "try again.",
+            )
             return
         for stage, target in targets.items():
             self.workers[stage].move_to(target)  # controller coordinates, as stored

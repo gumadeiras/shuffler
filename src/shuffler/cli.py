@@ -82,6 +82,8 @@ def probe(config_path: Path) -> int:
                 f"  state     {reading.state.value}"
                 + (f" ({reading.detail})" if reading.detail else "")
             )
+            if reading.fault:
+                print(f"  PROBLEM   {reading.fault}. Home and moves are blocked until then.")
         except DeviceError as error:
             print(f"  read failed: {error}")
             failures += 1

@@ -163,7 +163,10 @@ class AxisStore:
         except FileNotFoundError:
             return
         except (OSError, UnicodeError) as error:
-            raise AxisError(f"Cannot read {self.path}: {error}") from None
+            raise AxisError(
+                f"Cannot read {self.path}: {error}. Check that the file is not open in another "
+                "program, then restart shuffler."
+            ) from None
         try:
             data = json.loads(text)
             axes = {}
@@ -208,7 +211,8 @@ class AxisStore:
         except (ValueError, TypeError, AttributeError, OverflowError) as error:
             raise AxisError(
                 f"{self.path.name} is damaged ({error}). Stage names and directions cannot "
-                "be changed until the file is repaired or moved away."
+                "be changed until the file is repaired or moved away. Fix it in a text editor, or "
+                "move it out of the folder and shuffler starts with default names."
             ) from None
         self._axes, self._order = axes, order
 
@@ -232,5 +236,8 @@ class AxisStore:
         try:
             write_atomic(self.path, data)
         except OSError as error:
-            raise AxisError(f"Cannot save stage settings to {self.path}: {error}") from None
+            raise AxisError(
+                f"Cannot save stage settings to {self.path}: {error}. Check that the folder "
+                "can be written and the file is not open in another program."
+            ) from None
         self._axes, self._order = axes, order

@@ -51,6 +51,10 @@ class Reading:
     position: float | None
     state: State
     detail: str = ""  # controller detail, for example "Following error"
+    # A hardware error that blocks homing and moves, with what to do, for example
+    # "DC voltage too low. Check that the controller's 24 V power supply is ...".
+    # No final period, so it fits inside a sentence.
+    fault: str = ""
 
 
 class StageDriver(Protocol):

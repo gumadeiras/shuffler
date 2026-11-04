@@ -87,7 +87,9 @@ class FakeConexPort:
                 self.position, self.state = float(code[2:]), "33"
             return None
         if code == "OR":
-            if self.state.startswith("0"):
+            if self.flags & ~0x0003:  # a hardware error other than end of run (manual, OR)
+                self.error = "D"
+            elif self.state.startswith("0"):
                 self.position, self.state = 0.0, "32"
             else:
                 self.error = "K"
@@ -212,6 +214,55 @@ class ConexTest(unittest.TestCase):
         self.assertNotIn("1RS", self.port.written)
         self.assertIn("1OR", self.port.written)
         self.assertEqual(self.port.state, "32")
+
+    def test_low_voltage_is_a_fault_that_names_the_power_supply(self) -> None:
+        """Seen on the rig: 24 V unplugged gives TS 01000E, and OR fails with error D."""
+        self.stage.open()
+        self.port.state, self.port.flags = "0E", 0x0100
+        reading = self.stage.read()
+        self.assertIs(reading.state, State.NOT_HOMED)
+        self.assertIn("DC voltage too low", reading.fault)
+        self.assertIn("24 V power supply", reading.fault)
+        self.assertFalse(reading.fault.endswith("."), "the fault fits inside a sentence")
+
+    def test_home_with_a_fault_sends_nothing(self) -> None:
+        self.stage.open()
+        self.port.state, self.port.flags = "32", 0x0100  # READY would reset first
+        before = len(self.port.written)
+        with self.assertRaisesRegex(DeviceError, "Cannot home.*DC voltage too low.*24 V"):
+            self.stage.home()
+        sent = self.port.written[before:]
+        self.assertEqual(sent, ["1TS"], "no reset and no home search")
+
+    def test_a_refusal_names_a_hidden_fault(self) -> None:
+        """Error D says only "not allowed"; the status says why."""
+        self.stage.open()
+        self.port.state, self.port.flags = "0A", 0x0020
+        self.port.error = "@"
+        with self.assertRaisesRegex(DeviceError, "refused PA.*It reports Following error"):
+            self.stage.move_to(1.0)
+
+    def test_a_refusal_without_a_fault_says_what_to_do(self) -> None:
+        self.stage.open()
+        self.port.state = "0A"
+        with self.assertRaisesRegex(
+            DeviceError, "not allowed before the stage is homed. Press Home"
+        ):
+            self.stage.move_to(1.0)
+
+    def test_every_error_has_a_hint(self) -> None:
+        from shuffler import conex
+
+        self.assertEqual(set(conex.COMMAND_HINTS), set(conex.COMMAND_ERRORS))
+        faults = {bit for bit in conex.POSITIONER_ERRORS if not bit & conex.END_OF_RUN}
+        self.assertEqual(set(conex.FAULT_ADVICE), faults)
+
+    def test_end_of_run_is_not_a_fault(self) -> None:
+        self.port.state, self.port.flags = "0A", 0x0001
+        self.stage.open()
+        self.assertEqual(self.stage.read().fault, "")
+        self.stage.home()
+        self.assertIn("1OR", self.port.written)
 
     def test_home_when_ready_resets_first(self) -> None:
         self.stage.open()

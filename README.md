@@ -82,7 +82,8 @@ uv run shuffler-gui            # uses stages.toml in this folder
 uv run shuffler-gui --demo     # simulated stages; no hardware is touched
 ```
 
-1. The stages connect when the window opens.
+1. Press **Connect all** (or Connect on one card). Nothing connects by itself; set
+   `connect_on_start = true` in `stages.toml` to connect when the window opens.
 2. A stage that shows **Not homed** must be homed before it can move. Home moves the
    stage to its home position at one end of its travel, so check that the path is
    clear. A CONEX-CC loses its home after power-off or a reset.
@@ -167,6 +168,22 @@ uv run shuffler probe    # connect to each stage, read model, travel, position, 
 ```
 
 A log of every command is written to `shuffler.log` next to `stages.toml`.
+
+### When something goes wrong
+
+Every error says what happened and what to do next. The card shows it in pink. The
+most common ones:
+
+| The card says | Cause | Do this |
+|---|---|---|
+| DC voltage too low (Home is grayed out) | CONEX-CC without its 24 V supply. USB powers only the communication | Plug in and switch on the 24 V supply. Home comes back by itself |
+| … is in use by another program | The Newport or Kinesis application has the port | Close it, then press Connect |
+| No Thorlabs controller with serial … | K-Cube off, unplugged, or open in Kinesis | Switch it on, close Kinesis, press Connect |
+| Following error, current limit, short circuit | Something blocks the stage, or a cable is loose | Clear the path, check the cable, then ⋯ > Reset controller |
+| Lost contact | USB cable or power lost | A stop was already sent. Fix the cable, press Connect |
+
+A CONEX-CC that refuses a command is asked for its status at once, so a hardware
+error is named instead of the controller's "command not allowed".
 
 ## Files
 

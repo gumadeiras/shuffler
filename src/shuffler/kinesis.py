@@ -65,7 +65,9 @@ def _load(kinesis_dir: Path, *dlls: str) -> None:
         try:
             import clr
         except ImportError as error:
-            raise DeviceError(f"pythonnet is not available: {error}") from None
+            raise DeviceError(
+                f"pythonnet is not available: {error}. Run uv sync in the shuffler folder."
+            ) from None
         if str(kinesis_dir) not in sys.path:
             sys.path.append(str(kinesis_dir))
         for dll in dlls:
@@ -74,15 +76,17 @@ def _load(kinesis_dir: Path, *dlls: str) -> None:
             path = kinesis_dir / f"{dll}.dll"
             if not path.exists():
                 raise DeviceError(
-                    f"Thorlabs Kinesis is not installed in {kinesis_dir} ({path.name} is missing)."
+                    f"Thorlabs Kinesis is not installed in {kinesis_dir} ({path.name} is missing). "
+                    "Install Kinesis (64-bit), or set kinesis_dir in stages.toml to where it is."
                 )
             clr.AddReference(str(path))
             _loaded.add(dll)
 
 
 def _message(error: BaseException) -> str:
-    """The text of a .NET exception, without the type name."""
-    return str(getattr(error, "Message", None) or error).strip()
+    """The text of a .NET exception, without the type name, as a sentence (a hint follows)."""
+    text = str(getattr(error, "Message", None) or error).strip()
+    return text if text.endswith((".", "!", "?")) else f"{text}."
 
 
 def to_float(value: Any) -> float:
@@ -115,7 +119,10 @@ class KinesisStage:
         family = FAMILIES.get(serial[:2])
         if family is None:
             known = ", ".join(f"{p}xxxxxx ({f.product})" for p, f in FAMILIES.items())
-            raise DeviceError(f"Serial {serial} is not a supported K-Cube. Supported: {known}.")
+            raise DeviceError(
+                f"Serial {serial} is not a supported K-Cube. Supported: {known}. Check the "
+                "serial in stages.toml (uv run shuffler ports lists the controllers)."
+            )
         self._family = family
 
     def open(self, *, read_only: bool = False) -> StageInfo:
@@ -142,7 +149,8 @@ class KinesisStage:
             raise
         except Exception as error:
             raise DeviceError(
-                f"Cannot load Thorlabs Kinesis from {self._dir}: {_message(error)}"
+                f"Cannot load Thorlabs Kinesis from {self._dir}: {_message(error)} Check "
+                "kinesis_dir in stages.toml and that the 64-bit Kinesis is installed there."
             ) from None
         if self.serial not in present:
             raise DeviceError(
@@ -195,7 +203,10 @@ class KinesisStage:
             raise
         except Exception as error:
             self.close()
-            raise DeviceError(f"Thorlabs {self.serial}: {_message(error)}") from None
+            raise DeviceError(
+                f"Thorlabs {self.serial}: {_message(error)} Switch the K-Cube off and on, "
+                "then press Connect."
+            ) from None
         description = str(info.Description or family.product).strip()
         model = " · ".join(p for p in (description, stage_name) if p)
         return StageInfo(
@@ -232,7 +243,8 @@ class KinesisStage:
                 details.append("At backward limit switch")
         except Exception as error:
             raise DeviceError(
-                f"Lost contact with Thorlabs {self.serial}: {_message(error)}"
+                f"Lost contact with Thorlabs {self.serial}: {_message(error)} Check the K-Cube's "
+                "USB cable and power."
             ) from None
         if homing:
             state = State.HOMING
@@ -266,7 +278,8 @@ class KinesisStage:
             return to_float(device.GetVelocityParams().MaxVelocity)
         except Exception as error:
             raise DeviceError(
-                f"Thorlabs {self.serial}: cannot read the speed: {_message(error)}"
+                f"Thorlabs {self.serial}: cannot read the speed: {_message(error)} Press "
+                "Disconnect, then Connect."
             ) from None
 
     def set_velocity(self, velocity: float) -> None:
@@ -294,7 +307,7 @@ class KinesisStage:
 
     def _require(self) -> Any:
         if self._device is None:
-            raise DeviceError(f"Thorlabs {self.serial} is not connected.")
+            raise DeviceError(f"Thorlabs {self.serial} is not connected. Press Connect.")
         return self._device
 
     def _call(self, what: str, action: Any) -> None:
@@ -302,4 +315,7 @@ class KinesisStage:
         try:
             action(device)
         except Exception as error:
-            raise DeviceError(f"Thorlabs {self.serial} refused {what}: {_message(error)}") from None
+            raise DeviceError(
+                f"Thorlabs {self.serial} refused {what}: {_message(error)} If the card shows "
+                "Error, use ⋯ > Reset controller. Check that nothing blocks the stage."
+            ) from None

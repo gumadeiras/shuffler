@@ -52,6 +52,7 @@ class StageStatus:
     allowed: tuple[float, float] | None = None
     velocity: float | None = None  # the speed moves use now, units/s
     detail: str = ""
+    fault: str = ""  # a hardware error that blocks homing and moves (Reading.fault)
     error: str = ""
     contact_ok: bool = False
     speed_limit: float | None = None  # lower of the configured and reported maximum
@@ -61,9 +62,11 @@ class StageStatus:
     def ready_block_reason(self) -> str:
         """Why commands that need a homed, idle stage must wait."""
         if not self.state.connected:
-            return "not connected"
+            return "not connected. Press Connect"
         if not self.contact_ok:
             return "contact is not verified. Wait for a new reading"
+        if self.fault:
+            return self.fault
         if self.state is State.NOT_HOMED:
             return "not homed. Home it first"
         if self.state.busy:
@@ -99,6 +102,14 @@ class StageStatus:
             and self.state not in (State.NOT_HOMED, State.ERROR)
             and not self.state.busy
         )
+
+
+def unexpected(error: Exception) -> str:
+    """The message for an error that no rule expected: a bug, or an unknown device state."""
+    return (
+        f"Unexpected error: {error}. Details are in shuffler.log. Press Stop if the stage "
+        "moves, then use ⋯ > Disconnect and Connect."
+    )
 
 
 def allowed_range(config: StageConfig, info: StageInfo) -> tuple[float, float] | None:
@@ -210,7 +221,7 @@ class StageWorker:
                 self.tick(self._poll_s)
             except Exception as error:  # keep the thread alive, so Stop still works
                 log.exception("%s: unexpected error in the worker", self._who)
-                self._set(error=f"Unexpected error: {error}")
+                self._set(error=unexpected(error))
                 time.sleep(self._poll_s)
 
     def tick(self, timeout: float) -> None:
@@ -239,12 +250,12 @@ class StageWorker:
             self._set(error=str(error))
         except Exception as error:
             log.exception("%s: unexpected error in %s", self._who, name)
-            self._set(error=f"Unexpected error: {error}")
+            self._set(error=unexpected(error))
 
     def _do_connect(self) -> None:
         if self._driver is not None:
             return
-        self._set(state=State.CONNECTING, detail="", error="")
+        self._set(state=State.CONNECTING, detail="", fault="", error="")
         try:
             driver = self._make_driver(self.config)
             if hasattr(driver, "abort"):
@@ -256,7 +267,11 @@ class StageWorker:
             return
         except Exception as error:
             log.exception("%s: cannot connect", self._who)
-            self._set(state=State.OFFLINE, error=f"Cannot connect: {error}")
+            self._set(
+                state=State.OFFLINE,
+                error=f"Cannot connect: {error}. Details are in shuffler.log. Press Connect to "
+                "try again.",
+            )
             return
         allowed = allowed_range(self.config, info)
         self._driver, self._failures, self._latch = driver, 0, None
@@ -291,11 +306,14 @@ class StageWorker:
     def _check_speed(self, velocity: float) -> None:
         units = self.config.units
         if not math.isfinite(velocity) or velocity <= 0:
-            raise DeviceError(f"{self.label}: the speed must be more than 0 {units}/s.")
+            raise DeviceError(
+                f"{self.label}: the speed must be more than 0 {units}/s. Type a larger speed."
+            )
         limit = self._status.speed_limit
         if limit is not None and velocity > limit:
             raise DeviceError(
-                f"{self.label}: {velocity:g} {units}/s is above the maximum of {limit:g} {units}/s."
+                f"{self.label}: {velocity:g} {units}/s is above the maximum of "
+                f"{limit:g} {units}/s. Type a lower speed."
             )
 
     def _apply_speed(self) -> None:
@@ -318,7 +336,10 @@ class StageWorker:
                 log.info("%s: speed %g %s/s applied", self._who, self.speed, units)
             except DeviceError as error:
                 log.warning("%s: saved speed not applied: %s", self._who, error)
-                self._set(error=f"The saved speed of {self.speed:g} was not applied: {error}")
+                self._set(
+                    error=f"The saved speed of {self.speed:g} was not applied: {error} "
+                    "Set a speed on the card."
+                )
         self._read_velocity()
         ceiling = self.config.max_velocity
         current = self._status.velocity
@@ -330,7 +351,10 @@ class StageWorker:
                 log.info("%s: speed lowered to max_velocity %g %s/s", self._who, ceiling, units)
             except DeviceError as error:
                 log.error("%s: cannot lower the speed to max_velocity: %s", self._who, error)
-                self._set(error=f"Cannot lower the speed to max_velocity {ceiling:g}: {error}")
+                self._set(
+                    error=f"Cannot lower the speed to max_velocity {ceiling:g}: {error} "
+                    "Moves wait until the speed is known: set a lower speed on the card."
+                )
             self._read_velocity()
 
     def _read_velocity(self) -> None:
@@ -370,6 +394,7 @@ class StageWorker:
                 target=None,
                 velocity=None,
                 detail="",
+                fault="",
             )
             log.info("%s disconnected", self._who)
 
@@ -386,7 +411,8 @@ class StageWorker:
             shown_low, shown_high = sorted((self.display(low), self.display(high)))
             raise DeviceError(
                 f"{self.label}: {self._fmt(self.display(target))} {units} is outside the "
-                f"allowed range {self._fmt(shown_low)} to {self._fmt(shown_high)} {units}."
+                f"allowed range {self._fmt(shown_low)} to {self._fmt(shown_high)} {units}. "
+                "Choose a target inside it."
             )
         target = min(max(target, low), high)
         driver.move_to(target)
@@ -403,7 +429,7 @@ class StageWorker:
         status = self._status
         base = status.position
         if base is None:
-            raise DeviceError(f"{self.label}: the position is not known yet.")
+            raise DeviceError(f"{self.label}: the position is not known yet. Wait for a reading.")
         if status.target is not None and abs(base - status.target) <= SETTLED:
             base = status.target  # repeated jogs add up exactly
         self._do_move_to(base + delta)
@@ -411,6 +437,9 @@ class StageWorker:
     def _do_home(self) -> None:
         driver = self._connected_driver()
         self._refuse_if_busy()
+        if fault := self._status.fault:
+            # The controller would refuse it anyway (a CONEX-CC with error D).
+            raise DeviceError(f"{self.label}: cannot home. {fault}.")
         driver.home()
         self._hold(State.HOMING, None)
         self._speed_due = True  # a CONEX-CC resets before homing, which restores its speed
@@ -451,6 +480,7 @@ class StageWorker:
             "position": reading.position,
             "state": state,
             "detail": reading.detail,
+            "fault": reading.fault,
         }
         if state is State.NOT_HOMED:
             changes["target"] = None
@@ -478,6 +508,7 @@ class StageWorker:
             position=None,
             target=None,
             velocity=None,
+            fault="",
             error=f"Lost contact. {error} A stop was sent. Press Connect to try again.",
         )
 
@@ -505,7 +536,7 @@ class StageWorker:
 
     def _connected_driver(self) -> StageDriver:
         if self._driver is None:
-            raise DeviceError(f"{self.label} is not connected.")
+            raise DeviceError(f"{self.label} is not connected. Press Connect.")
         if not self._status.contact_ok:
             raise DeviceError(f"{self.label}: {self._status.ready_block_reason}.")
         return self._driver

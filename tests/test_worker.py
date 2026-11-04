@@ -99,6 +99,34 @@ class WorkerTest(unittest.TestCase):
         self.assertIn("not homed", worker.status.error)
         self.assertFalse(any(c.startswith("move_to") for c in stage.commands))
 
+    def test_a_fault_blocks_home_and_moves_and_clears_when_fixed(self) -> None:
+        worker, stage = self.make()
+        stage.fault = "DC voltage too low. Plug in the 24 V supply"
+        worker.connect()
+        self.run_all(worker)
+        self.assertEqual(worker.status.fault, stage.fault)
+        worker.home()
+        self.run_all(worker)
+        self.assertEqual(
+            worker.status.error, "X: cannot home. DC voltage too low. Plug in the 24 V supply."
+        )
+        self.assertNotIn("home", stage.commands, "the controller is never asked")
+        stage.fault = ""  # power restored
+        worker.tick(0)
+        self.assertEqual(worker.status.fault, "")
+        worker.home()
+        self.run_all(worker)
+        self.assertIn("home", stage.commands)
+
+    def test_a_fault_while_ready_blocks_moves(self) -> None:
+        worker, stage = self.connected_and_homed()
+        stage.fault = "Following error. Check the stage cable"
+        worker.tick(0)
+        worker.move_to(5.0)
+        self.run_all(worker)
+        self.assertIn("Following error", worker.status.error)
+        self.assertFalse(any(c.startswith("move_to") for c in stage.commands))
+
     def test_home_then_move(self) -> None:
         worker, stage = self.connected_and_homed()
         self.assertEqual(worker.status.position, 0.0)

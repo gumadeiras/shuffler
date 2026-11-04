@@ -8,8 +8,8 @@ presets = "presets.json"
 axes = "axes.json"
 # Where Thorlabs Kinesis is installed (64-bit).
 kinesis_dir = "C:/Program Files/Thorlabs/Kinesis"
-# Connect to every stage when the window opens.
-connect_on_start = true
+# Connect to every stage when the window opens (default false: press Connect all).
+connect_on_start = false
 # Ask before a home search and before going to a preset.
 confirm_moves = true
 

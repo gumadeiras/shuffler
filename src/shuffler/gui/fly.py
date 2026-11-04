@@ -51,10 +51,11 @@ SWAY_PX = 5.0
 
 # The drawing is in body units: the thorax is at the origin, the head points to +x.
 # HEIGHT is the vertical extent the widget must show (legs and spread wings).
-HEIGHT = 1.0
+HEIGHT = 1.2
+MARGIN_X = 0.66  # body units from the left edge (before the sway) to the thorax
 FOLDED_DEG = 12.0
 BUZZ_DEG = 10.0
-JUMP_DEG = 42.0
+JUMP_DEG = 34.0
 
 # (root, knee, foot) of the legs on the +y side; the -y side is the mirror image.
 LEGS = (
@@ -115,7 +116,7 @@ def paint_fly(painter: QPainter, pose: Pose, *, ink: str = theme.NAVY) -> None:
     offset = 0.05 + 0.18 * pose.lift
     painter.drawEllipse(QPointF(-0.12 + offset, offset), 0.46, 0.2)
 
-    scale = 1.0 + 0.12 * pose.lift
+    scale = 1.0 + 0.08 * pose.lift
     painter.scale(scale, scale)
 
     # Legs, under the body.
@@ -293,12 +294,14 @@ class FlyWidget(QWidget):
             lift = math.sin(math.pi * (now - self._jump_from) / JUMP_S)
         wings = FOLDED_DEG + (JUMP_DEG - FOLDED_DEG) * lift
         if self._busy:
+            # In the air the wings are spread, not buzzing, so they stay inside the widget.
+            buzz = not lift
             return Pose(
                 sway=math.sin(2 * math.pi * now / SWAY_S),
                 tilt=6.0 * math.cos(2 * math.pi * now / SWAY_S),
                 step=now / STEP_S,
-                wings=wings + BUZZ_DEG * abs(math.sin(2 * math.pi * now / BUZZ_S)),
-                buzz=True,
+                wings=wings + (BUZZ_DEG * abs(math.sin(2 * math.pi * now / BUZZ_S)) if buzz else 0),
+                buzz=buzz,
                 lift=lift,
                 live=True,
             )
@@ -338,7 +341,7 @@ class FlyWidget(QWidget):
     # Qt ------------------------------------------------------------------
 
     def sizeHint(self) -> QSize:
-        return QSize(80, 48)
+        return QSize(84, 52)
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()
@@ -348,18 +351,26 @@ class FlyWidget(QWidget):
             self.groom()
         super().mousePressEvent(event)
 
-    def paintEvent(self, _event: QPaintEvent) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        pose = self.pose()
+    def draw_fly(self, painter: QPainter, pose: Pose) -> tuple[float, float]:
+        """Draw the fly in this widget's frame; return the unit and the body centre x.
+
+        Every pose must stay inside the widget, which clips: a test draws the widest
+        poses (the jump, the tilted shuffle) without clipping and checks the bounds.
+        """
         unit = self.height() / HEIGHT
-        centre_x = 0.66 * unit + SWAY_PX + SWAY_PX * pose.sway
+        centre_x = MARGIN_X * unit + SWAY_PX + SWAY_PX * pose.sway
         painter.save()
         painter.translate(centre_x, self.height() / 2)
         painter.rotate(pose.tilt)
         painter.scale(unit, unit)
         paint_fly(painter, pose)
         painter.restore()
+        return unit, centre_x
+
+    def paintEvent(self, _event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        unit, centre_x = self.draw_fly(painter, self.pose())
         if self.mode == "asleep":
             # Above and right of the head.
             painter.setPen(QColor(theme.INK_SOFT))

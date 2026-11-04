@@ -379,9 +379,15 @@ class StageCard(QFrame):
 
         self._show_speed(status)
         self._enable(status)
-        self.error_label.setText(
-            status.error or (status.move_block_reason if state is State.READY else "")
-        )
+        if status.error:
+            problem = status.error
+        elif status.fault and state.connected:
+            problem = f"{status.fault}."
+        elif state is State.READY:
+            problem = status.move_block_reason
+        else:
+            problem = ""
+        self.error_label.setText(problem)
 
     def _show_speed(self, status: StageStatus) -> None:
         """The controller's speed, unless the user is typing one."""
@@ -413,8 +419,17 @@ class StageCard(QFrame):
         # Only in READY: a CONEX-CC refuses VA before homing and during motion.
         self.speed_box.setEnabled(not status.ready_block_reason)
         self._update_speed_button()
-        not_homed = state is State.NOT_HOMED
-        self.home_button.setEnabled(connected and status.contact_ok and not state.busy)
+        # A hardware error (status.fault) blocks Home: the controller refuses it until the
+        # error is gone, so the card says what to fix instead.
+        not_homed = state is State.NOT_HOMED and not status.fault
+        self.home_button.setEnabled(
+            connected and status.contact_ok and not state.busy and not status.fault
+        )
+        self.home_button.setToolTip(
+            f"Cannot home: {status.fault}."
+            if status.fault
+            else "Find the home position (reference the stage)."
+        )
         self.home_button.setObjectName("primary" if not_homed else "")
         self.home_button.setIcon(icon("home", theme.PANEL if not_homed else theme.NAVY))
         _restyle(self.home_button)
@@ -452,6 +467,8 @@ class StageCard(QFrame):
         if state is State.MOVING and status.target is not None:
             target = self._fmt(self.axis.to_display(status.target))
             return f"Moving to {target} {self.config.units}"
+        if state is State.NOT_HOMED and status.fault:
+            return "The controller reports a hardware error. Home is blocked until it is fixed."
         if state is State.NOT_HOMED:
             return "Home this stage before you move it."
         return status.detail

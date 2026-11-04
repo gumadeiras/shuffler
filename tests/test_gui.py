@@ -139,6 +139,24 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(card.home_button.objectName(), "primary")
         self.assertEqual(card.position_label.text(), "12.5000")
 
+    def test_a_fault_is_shown_and_blocks_home(self) -> None:
+        self.fakes["X"].fault = "DC voltage too low. Check the 24 V power supply"
+        self.window.connect_all()
+        self.run_all()
+        card = self.card("X")
+        self.assertFalse(card.home_button.isEnabled())
+        self.assertNotEqual(card.home_button.objectName(), "primary")
+        self.assertIn("24 V", card.home_button.toolTip())
+        self.assertEqual(
+            card.error_label.text(), "DC voltage too low. Check the 24 V power supply."
+        )
+        self.assertIn("hardware error", card.detail_label.text())
+        self.assertTrue(self.card("Z").home_button.isEnabled(), "only the faulty stage")
+        self.fakes["X"].fault = ""
+        self.run_all()
+        self.assertTrue(card.home_button.isEnabled())
+        self.assertEqual(card.error_label.text().strip(), "")
+
     def test_home_then_go_from_the_card(self) -> None:
         self.window.connect_all()
         self.run_all()
@@ -676,6 +694,46 @@ class FlyTest(unittest.TestCase):
         fly.startle()
         self.clock.now += fly_module.JUMP_S / 2
         self.assertFalse(fly.grab().isNull())
+
+    def test_every_pose_stays_inside_the_widget(self) -> None:
+        """The widget clips; the jump's spread wings were cut off at the top and bottom.
+
+        Draw the widest poses without clipping, on a canvas with a margin around the
+        widget, and check that nothing lands in the margin.
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QImage, QPainter
+
+        widget = self.fly(reduced=False)
+        margin = 20
+        poses = [fly_module.Pose(wings=fly_module.JUMP_DEG, lift=1.0), fly_module.Pose(rub=0.25)]
+        for sway in (-1.0, 1.0):
+            for tilt in (-6.0, 6.0):
+                poses.append(
+                    fly_module.Pose(sway=sway, tilt=tilt, wings=fly_module.JUMP_DEG, lift=1.0)
+                )
+                wings = fly_module.FOLDED_DEG + fly_module.BUZZ_DEG
+                poses.append(fly_module.Pose(sway=sway, tilt=tilt, wings=wings, buzz=True))
+        for pose in poses:
+            image = QImage(
+                widget.width() + 2 * margin, widget.height() + 2 * margin, QImage.Format_ARGB32
+            )
+            image.fill(Qt.transparent)
+            painter = QPainter(image)
+            painter.translate(margin, margin)
+            widget.draw_fly(painter, pose)
+            painter.end()
+            outside = [
+                (x - margin, y - margin)
+                for y in range(image.height())
+                for x in range(image.width())
+                if not (
+                    margin <= x < margin + widget.width() and margin <= y < margin + widget.height()
+                )
+                and image.pixelColor(x, y).alpha() > 8
+            ]
+            with self.subTest(pose=pose):
+                self.assertEqual(outside[:3], [], "the fly reaches outside its widget")
 
     def test_window_icon(self) -> None:
         sizes = fly_module.window_icon().availableSizes()

@@ -40,6 +40,7 @@ class FakeStage:
         self.commands: list[str] = []  # what was sent, for the tests
         self.fail_open: str | None = None
         self.fail_read: str | None = None
+        self.fault = ""  # a hardware error, as Reading.fault; it blocks the home search
         self.connected = False
         self._homed = homed
         self._enabled = True
@@ -78,7 +79,7 @@ class FakeStage:
     def read(self) -> Reading:
         if self.fail_read:
             raise DeviceError(self.fail_read)
-        return Reading(position=round(self._position(), 6), state=self._state())
+        return Reading(position=round(self._position(), 6), state=self._state(), fault=self.fault)
 
     def move_to(self, position: float) -> None:
         self.commands.append(f"move_to {position:g}")
@@ -90,6 +91,8 @@ class FakeStage:
 
     def home(self) -> None:
         self.commands.append("home")
+        if self.fault:
+            raise DeviceError("Simulated CONEX-CC refused OR: command not allowed.")
         if self.conex and self._homed:
             self.velocity = self.stored_velocity  # the reset before the home search
         self._homing, self._homed = True, False
