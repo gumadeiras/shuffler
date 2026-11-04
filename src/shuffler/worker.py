@@ -150,6 +150,7 @@ class StageWorker:
         self._commands: queue.Queue[tuple[str, tuple[Any, ...]]] = queue.Queue()
         self._failures = 0
         self._latch: tuple[State, float | None, float] | None = None  # state, target, deadline
+        self._last_reported: tuple[State, str] | None = None  # for the state-change log
         self._abort = threading.Event()
         self._quit = threading.Event()
         self._status = StageStatus(config.name, speed_limit=config.max_velocity)
@@ -275,6 +276,7 @@ class StageWorker:
             return
         allowed = allowed_range(self.config, info)
         self._driver, self._failures, self._latch = driver, 0, None
+        self._last_reported = None  # log the first reading of this connection
         self._set(info=info, allowed=allowed, target=None)
         log.info(
             "%s connected: %s at %s, travel %g to %g %s",
@@ -474,6 +476,14 @@ class StageWorker:
                 self._lost_contact(error)
             return
         self._failures = 0
+        reported = (reading.state, reading.detail)
+        if reported != self._last_reported:
+            # Every change the controller reports, so a stage that does not do what it
+            # was told can be followed in the log (a home that never started, for one).
+            self._last_reported = reported
+            position = "?" if reading.position is None else self._fmt(reading.position)
+            detail = f" ({reading.detail})" if reading.detail else ""
+            log.info("%s: %s%s at %s", self._who, reading.state.value, detail, position)
         state = self._latched(reading.state, reading.position)
         changes: dict[str, Any] = {
             "contact_ok": True,

@@ -5,6 +5,7 @@ import unittest
 
 import serial
 
+from shuffler import conex
 from shuffler.conex import ConexStage, parse_status
 from shuffler.stage import DeviceError, State
 
@@ -27,6 +28,7 @@ class FakeConexPort:
         self.error = "@"
         self.silent = False
         self.late = False  # the next reply arrives after the read times out
+        self.ignore_or = 0  # how many OR commands to accept without starting a home
         self.closed = False
 
     def write(self, data: bytes) -> int:
@@ -87,6 +89,9 @@ class FakeConexPort:
                 self.position, self.state = float(code[2:]), "33"
             return None
         if code == "OR":
+            if self.ignore_or:  # seen on the rig after a reset: accepted, never started
+                self.ignore_or -= 1
+                return None
             if self.flags & ~0x0003:  # a hardware error other than end of run (manual, OR)
                 self.error = "D"
             elif self.state.startswith("0"):
@@ -263,6 +268,46 @@ class ConexTest(unittest.TestCase):
         self.assertEqual(self.stage.read().fault, "")
         self.stage.home()
         self.assertIn("1OR", self.port.written)
+
+    def test_home_after_a_reset_waits_for_the_controller_to_settle(self) -> None:
+        self.stage.open()  # READY: home resets first
+        sent_at: dict[str, float] = {}
+        write = self.port.write
+
+        def timed_write(data: bytes) -> int:
+            sent_at.setdefault(data.decode("ascii").strip(), self.now)
+            return write(data)
+
+        self.port.write = timed_write
+        self.stage.home()
+        self.assertGreaterEqual(sent_at["1OR"] - sent_at["1RS"], 1.0 + conex.RESET_SETTLE_S)
+
+    def test_a_home_search_that_does_not_start_is_sent_once_more(self) -> None:
+        """Seen on the rig: after a reset, OR was accepted (no error) but never started."""
+        self.stage.open()
+        self.port.ignore_or = 1
+        self.stage.home()
+        self.assertEqual(self.port.written.count("1OR"), 2)
+        self.assertEqual(self.port.state, "32", "homed")
+
+    def test_a_home_search_that_never_starts_is_an_error(self) -> None:
+        self.port.state = "0A"
+        self.stage.open()
+        self.port.ignore_or = 9
+        with self.assertRaisesRegex(DeviceError, "did not start it. Press Home again"):
+            self.stage.home()
+        self.assertEqual(self.port.written.count("1OR"), 2, "one retry, no more")
+
+    def test_home_never_resets_a_homing_or_moving_controller(self) -> None:
+        """A second Home click reset the controller in the middle of its home search."""
+        self.stage.open()
+        for state, word in (("1E", "homing"), ("28", "moving")):
+            with self.subTest(state=word):
+                self.port.state = state
+                with self.assertRaisesRegex(DeviceError, f"is {word} already"):
+                    self.stage.home()
+                self.assertNotIn("1RS", self.port.written)
+                self.assertNotIn("1OR", self.port.written)
 
     def test_home_when_ready_resets_first(self) -> None:
         self.stage.open()

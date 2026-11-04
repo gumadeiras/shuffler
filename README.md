@@ -123,6 +123,13 @@ uv run shuffler-gui --demo     # simulated stages; no hardware is touched
 - A new move is refused while the stage moves. Press Stop first. After a command,
   the stage counts as moving until the controller confirms the motion (Kinesis
   reports its status up to 100 ms late), so a double-click cannot send two moves.
+- Home on a CONEX-CC that is already homed resets it first (it accepts a home search
+  only when not referenced). It never resets one that is homing or moving. After a
+  reset it waits until the controller has settled, and after the home search it
+  checks that homing started: on the rig, a home search sent right after a reset was
+  accepted but never started. If it does not start, it is sent once more, and then
+  the card says so. Every state change a controller reports is written to
+  `shuffler.log`.
 - Stop clears queued moves, then stops the stage. It also cancels a CONEX home
   while the controller reboots.
 - Reset is refused while the stage moves. Disabling the DDS100 in motion would let

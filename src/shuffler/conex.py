@@ -14,6 +14,7 @@ stored limits.
 """
 
 import contextlib
+import logging
 import math
 import threading
 import time
@@ -27,6 +28,10 @@ from shuffler.stage import DeviceError, Reading, StageInfo, State
 BAUD_RATE = 921600
 TIMEOUT_S = 0.3
 RESET_TIMEOUT_S = 15.0
+RESET_SETTLE_S = 0.5  # after a reset, "not referenced" must hold this long (see reset)
+HOME_START_S = 2.0  # after OR, the controller must leave its state within this time
+
+log = logging.getLogger("shuffler")
 
 # TS controller state (the last two characters of the reply).
 STATES: dict[str, tuple[State, str]] = {
@@ -271,21 +276,72 @@ class ConexStage:
         self._command(f"PA{format_number(position)}")
 
     def home(self) -> None:
-        """Home search. A CONEX-CC accepts it only when not referenced, so reset first.
+        """Home search. A CONEX-CC accepts it only when not referenced, so a homed
+        controller (READY or DISABLED) is reset first.
 
-        It also refuses it while a hardware error is present (manual, OR: error D, which
-        TE reports only as "execution not allowed"). Check first, before any reset, and
-        say which error and what to do.
+        The controller refuses OR while a hardware error is present (manual, OR: error D,
+        which TE reports only as "execution not allowed"), so that is checked first,
+        before any reset. A controller that is homing or moving is never reset: that
+        would end its home search or move (this happened when Home was pressed twice).
+
+        On the rig, a CONEX-CC reset this way accepted the OR that followed (no error)
+        but never started homing; it stayed "not referenced after reset". So the
+        start is confirmed: the controller must leave its state within HOME_START_S.
+        If it does not, OR is sent once more (a second OR during homing only gives
+        error E, "already started"), and then the home fails with a clear message.
         """
         status = self._query("TS")
         if fault := parse_fault(status):
             raise DeviceError(f"Cannot home: the CONEX-CC on {self.port} reports {fault}.")
         state, _ = parse_status(status)
+        if state.busy:
+            raise DeviceError(
+                f"The CONEX-CC on {self.port} is {state.value.lower()} already. Wait for it "
+                "to finish, or press Stop."
+            )
         if state is not State.NOT_HOMED:
             self.reset()
-        if self.abort.is_set():
-            raise DeviceError("Home cancelled by Stop. The controller was reset; home it again.")
-        self._command("OR")
+        for attempt in (1, 2):
+            if self.abort.is_set():
+                raise DeviceError(
+                    "Home cancelled by Stop. The controller was reset; home it again."
+                )
+            before = self._query("TS")[4:]
+            error = self._send("OR")
+            if error == "E":  # a home search is running already
+                return
+            if error:
+                raise DeviceError(self._refusal("OR", error))
+            started = self._wait_for_change(before, HOME_START_S)
+            log.info(
+                "%s: OR (attempt %d): state %s -> %s", self.port, attempt, before, started or before
+            )
+            if started:
+                return
+        raise DeviceError(
+            f"The CONEX-CC on {self.port} accepted the home search twice but did not start "
+            "it. Press Home again. If it happens again, unplug the controller's 24 V power "
+            "for a few seconds, plug it back, and press Connect."
+        )
+
+    def _wait_for_change(self, before: str, seconds: float) -> str:
+        """The new TS state code once it differs from ``before``, or "" after ``seconds``.
+
+        Stop ends the wait at once and counts as a change: nothing is retried after Stop.
+        """
+        deadline = self._clock() + seconds
+        while True:
+            try:
+                code = self._query("TS")[4:]
+            except DeviceError:
+                code = before
+            if code.upper() != before.upper():
+                return code
+            if self.abort.is_set():
+                return "stopped"
+            if self._clock() >= deadline:
+                return ""
+            self._sleep(0.1)
 
     def stop(self) -> None:
         self._write("ST")
@@ -300,15 +356,27 @@ class ConexStage:
         READY (VA is not allowed while NOT REFERENCED).
         """
         self._write("RS")
+        started = self._clock()
         self._sleep(1.0)
-        deadline = self._clock() + RESET_TIMEOUT_S
+        deadline = started + RESET_TIMEOUT_S
+        # Back means "not referenced" in two reads at least RESET_SETTLE_S apart: the
+        # first answer can come before the controller has finished starting up.
+        first_seen: float | None = None
         while self._clock() < deadline:
             try:
                 state, _ = parse_status(self._query("TS"))
             except DeviceError:
                 state = None
-            if state is State.NOT_HOMED:
+            if state is not State.NOT_HOMED:
+                first_seen = None
+            elif self.abort.is_set():  # back, and Stop pressed: nothing follows, no settling
                 self._clear_error()
+                return
+            elif first_seen is None:
+                first_seen = self._clock()
+            elif self._clock() - first_seen >= RESET_SETTLE_S:
+                self._clear_error()
+                log.info("%s: reset done in %.1f s", self.port, self._clock() - started)
                 return
             if self.abort.is_set():
                 break  # Stop pressed: the stage cannot move while it reboots, so stop waiting
@@ -409,11 +477,15 @@ class ConexStage:
         not clear it (CONEX-CC manual, TE). So TE is read before the command too, and the
         error read after it belongs to this command only.
         """
+        if error := self._send(code):
+            raise DeviceError(self._refusal(code[:2], error))
+
+    def _send(self, code: str) -> str:
+        """Send a command; return its TE error letter, or "" if it was accepted."""
         self._clear_error()
         self._write(code)
         error = self._query("TE")
-        if error and error != "@":
-            raise DeviceError(self._refusal(code[:2], error))
+        return "" if error in ("", "@") else error
 
     def _refusal(self, command: str, error: str) -> str:
         """What the controller refused, why, and what to do.
