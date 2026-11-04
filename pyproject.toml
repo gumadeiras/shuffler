@@ -18,6 +18,11 @@ dependencies = [
 shuffler = "shuffler.cli:main"
 shuffler-gui = "shuffler.gui.app:main"
 
+# The same window without a console: .venv\Scripts\shufflerw.exe. Windows pins a
+# shortcut to an .exe to the taskbar (not one to a .bat); see `shuffler shortcut`.
+[project.gui-scripts]
+shufflerw = "shuffler.gui.app:main"
+
 [dependency-groups]
 dev = ["ruff>=0.15,<1"]
 

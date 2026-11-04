@@ -2,6 +2,8 @@
 
 shuffler ports            list serial ports and Thorlabs controllers
 shuffler probe            connect to each configured stage, read it, disconnect
+shuffler icon [FILE]      write the app icon as a Windows .ico (default shuffler.ico)
+shuffler shortcut         Start menu and desktop shortcuts that can be pinned to the taskbar
 """
 
 import argparse
@@ -22,10 +24,42 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("ports", help="list serial ports and Thorlabs controllers")
     sub.add_parser("probe", help="read each configured stage without moving it")
+    icon_parser = sub.add_parser("icon", help="write the app icon as a Windows .ico file")
+    icon_parser.add_argument("file", type=Path, nargs="?", default=Path("shuffler.ico"))
+    sub.add_parser("shortcut", help="make Start menu and desktop shortcuts you can pin")
     args = parser.parse_args(argv)
     if args.command == "ports":
         return ports(args.config)
+    if args.command == "icon":
+        return icon(args.file)
+    if args.command == "shortcut":
+        return shortcut()
     return probe(args.config)
+
+
+def shortcut() -> int:
+    """Start menu and desktop shortcuts that Windows can pin (see tools/install-shortcut.ps1)."""
+    import subprocess
+
+    if sys.platform != "win32":
+        print("Shortcuts are made on Windows only.")
+        return 1
+    repo = Path(__file__).resolve().parents[2]
+    from shuffler.gui.fly import write_ico
+
+    write_ico(repo / "shuffler.ico")
+    script = repo / "tools" / "install-shortcut.ps1"
+    command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+    return subprocess.call([*command, "-Repo", str(repo)])
+
+
+def icon(path: Path) -> int:
+    from shuffler.gui.fly import write_ico
+
+    write_ico(path)
+    print(f"Wrote {path.resolve()}")
+    print("Shortcut icon: right-click the shortcut > Properties > Change Icon > Browse.")
+    return 0
 
 
 def ports(config_path: Path) -> int:

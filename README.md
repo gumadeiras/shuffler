@@ -75,7 +75,21 @@ copy stages.toml.example stages.toml   # then edit names, ports, and limits
 or a K-Cube can be open in only one program at a time. shuffler tells you which
 program to close if it cannot connect.
 
-Double-click `shuffler.bat`, or:
+### A taskbar icon
+
+```powershell
+uv run shuffler shortcut
+```
+
+This makes a **shuffler** shortcut in the Start menu and on the desktop, with the fly
+icon (`shuffler.ico`). Open Start, right-click **shuffler**, and choose **Pin to
+taskbar** (or right-click the open window's taskbar button). The shortcut starts
+`.venv\Scripts\shufflerw.exe`, which opens the window without a console. Windows does
+not pin a shortcut to a `.bat` file, and the shortcut and the window share an app ID
+(`ClarkLab.shuffler`), so the pinned icon and the open window are one taskbar button.
+`uv run shuffler icon` writes only the `.ico`.
+
+Or double-click `shuffler.bat`, or:
 
 ```powershell
 uv run shuffler-gui            # uses stages.toml in this folder
@@ -83,7 +97,9 @@ uv run shuffler-gui --demo     # simulated stages; no hardware is touched
 ```
 
 1. Press **Connect all** (or Connect on one card). Nothing connects by itself; set
-   `connect_on_start = true` in `stages.toml` to connect when the window opens.
+   `connect_on_start = true` in `stages.toml` to connect when the window opens. When
+   every stage is connected, the button turns red and reads **Disconnect all** (it
+   asks first if a stage is moving, and stops it before it disconnects).
 2. A stage that shows **Not homed** must be homed before it can move. Home moves the
    stage to its home position at one end of its travel, so check that the path is
    clear. A CONEX-CC loses its home after power-off or a reset.

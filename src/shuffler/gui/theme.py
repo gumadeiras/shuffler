@@ -69,6 +69,8 @@ TEXT_PAIRS = {
     "attention text on panel": (PINK_TEXT, PANEL),
     "primary button text": (PANEL, NAVY),
     "live Stop button text": (PANEL, PINK_FILL),
+    "Disconnect all button text": (PINK_TEXT, PANEL),
+    "Disconnect all button text, hovered": (PINK_TEXT, PINK_WASH),
     "demo badge": (PANEL, GOLD),
     "error text on panel": (PINK_TEXT, PANEL),
     "secondary on window": (INK_SOFT, SURFACE),
@@ -175,6 +177,9 @@ QPushButton#stop[live="true"] {{ background: {PINK_FILL}; color: {PANEL};
 QPushButton#stopAll {{ font-weight: bold; padding: 8px 18px; background: {NAVY}; color: {PANEL};
     border-color: {NAVY}; }}
 QPushButton#stopAll[live="true"] {{ background: {PINK_FILL}; border-color: {PINK_FILL}; }}
+QPushButton#disconnectAll {{ color: {PINK_TEXT}; border: 1px solid {PINK_TEXT};
+    font-weight: bold; }}
+QPushButton#disconnectAll:hover {{ background: {PINK_WASH}; }}
 QComboBox, QLineEdit {{ border: 1px solid {LINE}; border-radius: 6px;
     padding: 4px 8px; background: {PANEL}; color: {NAVY}; }}
 QComboBox:focus, QLineEdit:focus {{ border-color: {NAVY}; }}

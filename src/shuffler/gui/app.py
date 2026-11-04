@@ -41,6 +41,7 @@ from shuffler.gui.stage_card import StageCard
 from shuffler.gui.widgets import ElidedLabel
 from shuffler.presets import PresetStore
 from shuffler.rig import driver_factory
+from shuffler.stage import State
 from shuffler.worker import StageWorker
 
 log = logging.getLogger("shuffler")
@@ -99,8 +100,16 @@ class MainWindow(QMainWindow):
         demo_badge = QLabel("DEMO · simulated stages")
         demo_badge.setObjectName("demo")
         demo_badge.setVisible(demo)
-        self.connect_all_button = QPushButton(icon("connect"), "Connect all")
-        self.connect_all_button.clicked.connect(self.connect_all)
+        # Connect all; once every stage is connected, Disconnect all (red outline). It
+        # keeps the width of the longer text, so the top bar does not jump.
+        self.connect_all_button = QPushButton()
+        self._show_connection_button(all_connected=True)
+        widest = self.connect_all_button.sizeHint().width()
+        self._show_connection_button(all_connected=False)
+        self.connect_all_button.setMinimumWidth(
+            max(widest, self.connect_all_button.sizeHint().width())
+        )
+        self.connect_all_button.clicked.connect(self._connection_button_clicked)
         self.stop_all_button = QPushButton(icon("stop", theme.PANEL), "Stop all (Esc)")
         self.stop_all_button.setObjectName("stopAll")
         self.stop_all_button.setToolTip("Stop every stage now. Esc does the same from anywhere.")
@@ -210,7 +219,54 @@ class MainWindow(QMainWindow):
             self.stop_all_button.setProperty("live", live)
             self.stop_all_button.style().unpolish(self.stop_all_button)
             self.stop_all_button.style().polish(self.stop_all_button)
-        self.connect_all_button.setEnabled(any(not s.state.connected for s in statuses.values()))
+        all_connected = all(s.state.connected for s in statuses.values())
+        self._show_connection_button(all_connected=all_connected)
+        self.connect_all_button.setEnabled(
+            all_connected or any(s.state is State.OFFLINE for s in statuses.values())
+        )
+
+    @property
+    def all_connected(self) -> bool:
+        return all(w.status.state.connected for w in self.workers)
+
+    def _show_connection_button(self, *, all_connected: bool) -> None:
+        button = self.connect_all_button
+        name = "disconnectAll" if all_connected else ""
+        if button.objectName() == name and button.text():
+            return
+        button.setObjectName(name)
+        if all_connected:
+            button.setText("Disconnect all")
+            button.setIcon(icon("disconnect", theme.PINK_TEXT))
+            button.setToolTip("Disconnect every stage. A moving stage is stopped first.")
+        else:
+            button.setText("Connect all")
+            button.setIcon(icon("connect"))
+            button.setToolTip("Connect every stage that is not connected.")
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+    def _connection_button_clicked(self) -> None:
+        if self.all_connected:
+            self.disconnect_all()
+        else:
+            self.connect_all()
+
+    def disconnect_all(self) -> None:
+        if any(w.status.state.busy for w in self.workers):
+            answer = QMessageBox.question(
+                self,
+                "Disconnect all",
+                "A stage is moving. Stop all stages and disconnect?",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        for worker in self.workers:
+            worker.disconnect()  # the worker stops a moving stage before it disconnects
+        self.say("Disconnecting every stage.", 5000)
+        log.info("disconnect all")
 
     def _arrange(self, order: Sequence[str]) -> None:
         """Put the cards (and the preset columns) in ``order``."""
@@ -356,12 +412,33 @@ def setup_logging(folder: Path | None) -> None:
             root.addHandler(file)
 
 
+APP_ID = "ClarkLab.shuffler"  # also on the shortcut that `shuffler shortcut` makes
+
+
+def set_windows_app_id() -> None:
+    """Group the window with its pinned taskbar shortcut, under the shuffler icon.
+
+    The window belongs to a python process, so Windows would group it with Python, not
+    with the shortcut. An explicit app ID, the same on the process and the shortcut,
+    makes them one taskbar button. Call before the first window.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except (OSError, AttributeError):
+        log.warning("Cannot set the Windows app ID; the taskbar may group shuffler with Python")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="shuffler-gui", description="Motorized stage control")
     parser.add_argument("--config", type=Path, default=Path("stages.toml"))
     parser.add_argument("--demo", action="store_true", help="simulated stages, no hardware")
     args = parser.parse_args(argv)
 
+    set_windows_app_id()
     application = QApplication.instance() or QApplication(sys.argv[:1])
     application.setApplicationName("shuffler")
     theme.apply(application)

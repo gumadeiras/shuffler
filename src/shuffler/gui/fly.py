@@ -18,15 +18,18 @@ wings turn pink while a stage moves (the static equivalent of the shuffle).
 
 import math
 import os
+import struct
 import sys
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QIcon,
+    QImage,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -191,23 +194,74 @@ def _paint_wings(
         painter.restore()
 
 
+ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)  # what Windows asks an .ico for
+
+
+def icon_image(size: int) -> QImage:
+    """The app icon: the fly on a navy tile. A QImage, so no window system is needed."""
+    image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(theme.NAVY))
+    painter.drawRoundedRect(QRectF(0, 0, size, size), size * 0.22, size * 0.22)
+    painter.translate(size * 0.53, size * 0.5)
+    painter.scale(size * 0.95, size * 0.95)
+    paint_fly(painter, Pose(wings=22.0), ink=theme.CREAM)
+    painter.end()
+    return image
+
+
 def window_icon() -> QIcon:
-    """The fly on a navy tile, drawn at run time."""
+    """The window and taskbar icon, drawn at run time."""
     result = QIcon()
-    for size in (16, 24, 32, 48, 64, 128, 256):
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(theme.NAVY))
-        painter.drawRoundedRect(QRectF(0, 0, size, size), size * 0.22, size * 0.22)
-        painter.translate(size * 0.53, size * 0.5)
-        painter.scale(size * 0.95, size * 0.95)
-        paint_fly(painter, Pose(wings=22.0), ink=theme.CREAM)
-        painter.end()
-        result.addPixmap(pixmap)
+    for size in ICON_SIZES:
+        result.addPixmap(QPixmap.fromImage(icon_image(size)))
     return result
+
+
+def write_ico(path: Path) -> None:
+    """Write the app icon as a Windows .ico (for a desktop shortcut), every size inside.
+
+    ICO layout: a 6-byte header, a 16-byte entry per image (a width or height of 0 means
+    256), then the data. The classic layout, which every Windows reader accepts: 256 px
+    as PNG, the smaller sizes as 32-bit bitmaps (a PNG there broke System.Drawing).
+    """
+    images = []
+    for size in ICON_SIZES:
+        image = icon_image(size)
+        if size >= 256:
+            data = QByteArray()
+            buffer = QBuffer(data)
+            buffer.open(QIODevice.WriteOnly)
+            image.save(buffer, "PNG")
+            buffer.close()
+            images.append((size, bytes(data)))
+        else:
+            images.append((size, _ico_bitmap(image)))
+    header = struct.pack("<HHH", 0, 1, len(images))
+    offset = len(header) + 16 * len(images)
+    entries, blobs = b"", b""
+    for size, png in images:
+        side = 0 if size >= 256 else size
+        entries += struct.pack("<BBBBHHII", side, side, 0, 0, 1, 32, len(png), offset)
+        blobs += png
+        offset += len(png)
+    path.write_bytes(header + entries + blobs)
+
+
+def _ico_bitmap(image: QImage) -> bytes:
+    """One .ico bitmap: a BITMAPINFOHEADER (double height: color + mask), BGRA rows
+    bottom-up with straight alpha, then an all-zero 1-bit mask (the alpha decides)."""
+    size = image.width()
+    rows = image.convertToFormat(QImage.Format_ARGB32).flipped(Qt.Vertical)
+    color = bytes(rows.constBits())[: size * size * 4]  # ARGB32 is B, G, R, A in memory
+    mask = bytes(((size + 31) // 32) * 4 * size)
+    header = struct.pack(
+        "<IiiHHIIiiII", 40, size, size * 2, 1, 32, 0, len(color) + len(mask), 0, 0, 0, 0
+    )
+    return header + color + mask
 
 
 class FlyWidget(QWidget):

@@ -139,6 +139,38 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(card.home_button.objectName(), "primary")
         self.assertEqual(card.position_label.text(), "12.5000")
 
+    def test_connect_all_becomes_disconnect_all(self) -> None:
+        button = self.window.connect_all_button
+        self.assertEqual(button.text(), "Connect all")
+        self.workers[0].connect()  # one of two: still Connect all, for the other one
+        self.run_all()
+        self.assertEqual(button.text(), "Connect all")
+        self.assertTrue(button.isEnabled())
+        width = button.width()
+        button.click()
+        self.run_all()
+        self.assertEqual(button.text(), "Disconnect all")
+        self.assertEqual(button.objectName(), "disconnectAll", "the red style")
+        self.assertEqual(button.width(), width, "the top bar does not jump")
+        button.click()
+        self.run_all()
+        self.assertEqual([w.status.state for w in self.workers], [State.OFFLINE] * 2)
+        self.assertEqual(button.text(), "Connect all")
+
+    def test_disconnect_all_asks_while_a_stage_moves(self) -> None:
+        self.ready()
+        self.card("X").forward_button.click()
+        self.run_all()
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Cancel):
+            self.window.connect_all_button.click()
+        self.run_all()
+        self.assertTrue(all(w.status.state.connected for w in self.workers), "cancelled")
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.window.connect_all_button.click()
+        self.run_all()
+        self.assertIn("stop", self.fakes["X"].commands)
+        self.assertEqual([w.status.state for w in self.workers], [State.OFFLINE] * 2)
+
     def test_a_fault_is_shown_and_blocks_home(self) -> None:
         self.fakes["X"].fault = "DC voltage too low. Check the 24 V power supply"
         self.window.connect_all()
@@ -734,6 +766,37 @@ class FlyTest(unittest.TestCase):
             ]
             with self.subTest(pose=pose):
                 self.assertEqual(outside[:3], [], "the fly reaches outside its widget")
+
+    def test_ico_file(self) -> None:
+        """A valid .ico: every size, 256 px as PNG, the rest as 32-bit bitmaps whose
+        corners are transparent (the rounded tile) and whose centre is opaque."""
+        import struct
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "shuffler.ico"
+            fly_module.write_ico(path)
+            data = path.read_bytes()
+        reserved, kind, count = struct.unpack_from("<HHH", data)
+        self.assertEqual((reserved, kind, count), (0, 1, len(fly_module.ICON_SIZES)))
+        for index, size in enumerate(fly_module.ICON_SIZES):
+            width, height, _, _, planes, bits, length, offset = struct.unpack_from(
+                "<BBBBHHII", data, 6 + 16 * index
+            )
+            with self.subTest(size=size):
+                self.assertEqual((width or 256, height or 256, planes, bits), (size, size, 1, 32))
+                self.assertLessEqual(offset + length, len(data))
+                blob = data[offset : offset + length]
+                if size == 256:
+                    self.assertTrue(blob.startswith(b"\x89PNG"))
+                    continue
+                self.assertEqual(struct.unpack_from("<Iii", blob), (40, size, size * 2))
+
+                def alpha(x: int, y: int, blob: bytes = blob, size: int = size) -> int:
+                    row = size - 1 - y  # bottom-up
+                    return blob[40 + (row * size + x) * 4 + 3]
+
+                self.assertEqual(alpha(0, 0), 0, "rounded corner")
+                self.assertEqual(alpha(size // 2, size // 2), 255)
 
     def test_window_icon(self) -> None:
         sizes = fly_module.window_icon().availableSizes()
