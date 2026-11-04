@@ -32,6 +32,7 @@ from shuffler.stage import DeviceError, StageDriver, StageInfo, State
 log = logging.getLogger("shuffler")
 
 POLL_S = 0.1
+VELOCITY_RETRY_S = 1.0
 READ_FAILURE_LIMIT = 5
 TOLERANCE = 1e-6  # floating point slack on range checks
 SETTLED = 0.002  # a jog continues from the last target when the stage is this close to it
@@ -41,6 +42,8 @@ MOTION = frozenset({"move_to", "move_by", "home", "reset"})
 
 @dataclass(frozen=True)
 class StageStatus:
+    """One published reading, with command checks shared by the worker and GUI."""
+
     name: str
     state: State = State.OFFLINE
     position: float | None = None
@@ -50,6 +53,52 @@ class StageStatus:
     velocity: float | None = None  # the speed moves use now, units/s
     detail: str = ""
     error: str = ""
+    contact_ok: bool = False
+    speed_limit: float | None = None  # lower of the configured and reported maximum
+    accepted_speed: float | None = None  # last speed request the controller accepted
+
+    @property
+    def ready_block_reason(self) -> str:
+        """Why commands that need a homed, idle stage must wait."""
+        if not self.state.connected:
+            return "not connected"
+        if not self.contact_ok:
+            return "contact is not verified. Wait for a new reading"
+        if self.state is State.NOT_HOMED:
+            return "not homed. Home it first"
+        if self.state.busy:
+            return f"{self.state.value.lower()}. Wait or press Stop"
+        if self.state is not State.READY:
+            return f"{self.state.value.lower()}. Reset it first"
+        return ""
+
+    @property
+    def move_block_reason(self) -> str:
+        """Shared by the worker, the card controls, and the preset preview."""
+        if reason := self.ready_block_reason:
+            return reason
+        if self.allowed is None:
+            return "no allowed range. Check min and max in stages.toml"
+        if self.speed_limit is not None and (
+            self.velocity is None
+            or not math.isfinite(self.velocity)
+            or not 0 < self.velocity <= self.speed_limit
+        ):
+            return (
+                f"speed is not verified within the maximum of {self.speed_limit:g}. "
+                "Wait for a speed reading or set a valid speed"
+            )
+        return ""
+
+    @property
+    def can_save_position(self) -> bool:
+        return (
+            self.contact_ok
+            and self.position is not None
+            and self.state.connected
+            and self.state not in (State.NOT_HOMED, State.ERROR)
+            and not self.state.busy
+        )
 
 
 def allowed_range(config: StageConfig, info: StageInfo) -> tuple[float, float] | None:
@@ -74,14 +123,15 @@ class StageWorker:
         # Controller coordinate -> the number the window shows (a reversed axis mirrors it).
         # Used only in messages; the window sets it.
         self.display: Callable[[float], float] = lambda value: value
-        # The speed this stage should use (units/s): the value saved in the window, else
-        # `velocity` from stages.toml, else None (keep the controller's speed). A
-        # successful set_velocity() updates it, and the window saves it. It is applied,
+        # The requested speed (units/s): the saved value, else `velocity` from stages.toml,
+        # else None (keep the controller's speed). Only a successful set_velocity() is
+        # published as status.accepted_speed for the window to save. It is applied,
         # after the same checks as a typed speed, each time the stage becomes READY after
         # a connect, home, or reset: both controllers forget a working speed, and a
         # CONEX-CC accepts VA only in READY.
         self.speed: float | None = config.velocity
         self._speed_due = False
+        self._velocity_retry_at = 0.0
         self._make_driver = make_driver
         self._poll_s = poll_s
         self._clock = clock
@@ -91,7 +141,7 @@ class StageWorker:
         self._latch: tuple[State, float | None, float] | None = None  # state, target, deadline
         self._abort = threading.Event()
         self._quit = threading.Event()
-        self._status = StageStatus(config.name)
+        self._status = StageStatus(config.name, speed_limit=config.max_velocity)
         self._thread = threading.Thread(target=self._run, name=f"stage-{config.name}", daemon=True)
 
     # -- any thread -------------------------------------------------------------------------
@@ -234,22 +284,15 @@ class StageWorker:
         driver.set_velocity(velocity)
         self.speed = velocity
         self._speed_due = False
+        self._set(accepted_speed=velocity)
         self._read_velocity()
         log.info("%s: speed set to %g %s/s", self._who, velocity, self.config.units)
-
-    def speed_limit(self) -> float | None:
-        """The highest speed the app sends: the lower of the controller's reported maximum
-        and `max_velocity` in stages.toml. A CONEX-CC reports none, but refuses a speed above
-        the maximum stored in its configuration (error C)."""
-        info = self._status.info
-        limits = [v for v in (info.max_velocity if info else None, self.config.max_velocity) if v]
-        return min(limits) if limits else None
 
     def _check_speed(self, velocity: float) -> None:
         units = self.config.units
         if not math.isfinite(velocity) or velocity <= 0:
             raise DeviceError(f"{self.label}: the speed must be more than 0 {units}/s.")
-        limit = self.speed_limit()
+        limit = self._status.speed_limit
         if limit is not None and velocity > limit:
             raise DeviceError(
                 f"{self.label}: {velocity:g} {units}/s is above the maximum of {limit:g} {units}/s."
@@ -265,10 +308,13 @@ class StageWorker:
         assert self._driver is not None
         self._speed_due = False
         units = self.config.units
+        applied = False
         if self.speed is not None:
             try:
                 self._check_speed(self.speed)
                 self._driver.set_velocity(self.speed)
+                applied = True
+                self._set(accepted_speed=self.speed)
                 log.info("%s: speed %g %s/s applied", self._who, self.speed, units)
             except DeviceError as error:
                 log.warning("%s: saved speed not applied: %s", self._who, error)
@@ -276,7 +322,9 @@ class StageWorker:
         self._read_velocity()
         ceiling = self.config.max_velocity
         current = self._status.velocity
-        if ceiling is not None and (current is None or current > ceiling):
+        if ceiling is not None and (
+            (current is None and not applied) or (current is not None and current > ceiling)
+        ):
             try:
                 self._driver.set_velocity(ceiling)
                 log.info("%s: speed lowered to max_velocity %g %s/s", self._who, ceiling, units)
@@ -287,12 +335,17 @@ class StageWorker:
 
     def _read_velocity(self) -> None:
         """The speed the controller reports, read only in READY (a CONEX-CC refuses VA?
-        in other states). A read failure does not stop the stage."""
+        in other states). Unknown speeds retry once per second while READY. A read
+        failure does not stop the stage or send another speed command."""
         assert self._driver is not None
         if self._status.state is not State.READY:
             return
+        self._velocity_retry_at = self._clock() + VELOCITY_RETRY_S
         try:
-            self._set(velocity=self._driver.get_velocity())
+            velocity = self._driver.get_velocity()
+            if not math.isfinite(velocity) or velocity <= 0:
+                raise DeviceError("The controller returned an invalid speed.")
+            self._set(velocity=velocity)
         except DeviceError as error:
             log.warning("%s: %s", self._who, error)
             self._set(velocity=None)
@@ -310,15 +363,23 @@ class StageWorker:
         finally:
             driver.close()
             self._latch = None
-            self._set(state=State.OFFLINE, position=None, target=None, velocity=None, detail="")
+            self._set(
+                state=State.OFFLINE,
+                contact_ok=False,
+                position=None,
+                target=None,
+                velocity=None,
+                detail="",
+            )
             log.info("%s disconnected", self._who)
 
     def _do_move_to(self, target: float) -> None:
-        driver = self._ready_driver()
+        driver = self._connected_driver()
+        if reason := self._status.move_block_reason:
+            raise DeviceError(f"{self.label}: {reason}.")
         target = round(target, self.config.decimals)
         allowed = self._status.allowed
-        if allowed is None:
-            raise DeviceError(f"{self.label}: no allowed range. Check min and max in stages.toml.")
+        assert allowed is not None
         low, high = allowed
         if not low - TOLERANCE <= target <= high + TOLERANCE:
             units = self.config.units
@@ -379,12 +440,14 @@ class StageWorker:
             reading = self._driver.read()
         except DeviceError as error:
             self._failures += 1
+            self._set(contact_ok=False)
             if self._failures >= READ_FAILURE_LIMIT:
                 self._lost_contact(error)
             return
         self._failures = 0
         state = self._latched(reading.state, reading.position)
         changes: dict[str, Any] = {
+            "contact_ok": True,
             "position": reading.position,
             "state": state,
             "detail": reading.detail,
@@ -393,12 +456,11 @@ class StageWorker:
             changes["target"] = None
         if state in (State.NOT_HOMED, State.OFFLINE):
             changes["velocity"] = None  # unknown until READY (a reset restores the default)
-        was_ready = self._status.state is State.READY
         self._set(**changes)
-        if state is State.READY and (self._speed_due or not was_ready):
+        if state is State.READY:
             if self._speed_due:
                 self._apply_speed()
-            elif self._status.velocity is None:
+            elif self._status.velocity is None and self._clock() >= self._velocity_retry_at:
                 self._read_velocity()
 
     def _lost_contact(self, error: DeviceError) -> None:
@@ -412,8 +474,10 @@ class StageWorker:
             driver.close()
         self._set(
             state=State.OFFLINE,
+            contact_ok=False,
             position=None,
             target=None,
+            velocity=None,
             error=f"Lost contact. {error} A stop was sent. Press Connect to try again.",
         )
 
@@ -428,7 +492,12 @@ class StageWorker:
         if self._latch is None:
             return reported
         held, target, deadline = self._latch
-        arrived = target is not None and position is not None and abs(position - target) <= SETTLED
+        arrival_tolerance = min(SETTLED, 0.5 * 10**-self.config.decimals)
+        arrived = (
+            target is not None
+            and position is not None
+            and abs(position - target) <= arrival_tolerance
+        )
         if reported.busy or reported is State.ERROR or arrived or self._clock() >= deadline:
             self._latch = None  # the controller reports for itself now
             return reported
@@ -437,6 +506,8 @@ class StageWorker:
     def _connected_driver(self) -> StageDriver:
         if self._driver is None:
             raise DeviceError(f"{self.label} is not connected.")
+        if not self._status.contact_ok:
+            raise DeviceError(f"{self.label}: {self._status.ready_block_reason}.")
         return self._driver
 
     def _refuse_if_busy(self, advice: str = "Wait or press Stop.") -> None:
@@ -446,15 +517,18 @@ class StageWorker:
 
     def _ready_driver(self) -> StageDriver:
         driver = self._connected_driver()
-        state = self._status.state
-        if state is State.NOT_HOMED:
-            raise DeviceError(f"{self.label} is not homed. Home it first.")
-        self._refuse_if_busy()
-        if state is not State.READY:
-            raise DeviceError(f"{self.label} is {state.value.lower()}. Reset it first.")
+        if reason := self._status.ready_block_reason:
+            raise DeviceError(f"{self.label}: {reason}.")
         return driver
 
     def _set(self, **changes: Any) -> None:
+        info = changes.get("info", self._status.info)
+        limits = [
+            value
+            for value in (info.max_velocity if info else None, self.config.max_velocity)
+            if value is not None
+        ]
+        changes["speed_limit"] = min(limits) if limits else None
         self._status = replace(self._status, **changes)
 
     def _put(self, name: str, *args: Any) -> None:

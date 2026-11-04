@@ -36,8 +36,7 @@ from shuffler.gui import theme
 from shuffler.gui.icons import blank, icon
 from shuffler.gui.widgets import WrapLabel
 from shuffler.presets import Preset, PresetError, PresetStore
-from shuffler.stage import State
-from shuffler.worker import StageStatus, StageWorker
+from shuffler.worker import TOLERANCE, StageStatus, StageWorker
 
 MATCH_TOLERANCE = 0.001  # a stage is "at" a preset position within this distance
 
@@ -69,7 +68,12 @@ def at_preset(preset: Preset, statuses: dict[str, StageStatus]) -> bool:
     """Every stage in the preset is connected and at its saved position."""
     for name, value in preset.positions.items():
         status = statuses.get(name)
-        if status is None or status.position is None or not status.state.connected:
+        if (
+            status is None
+            or not status.contact_ok
+            or status.position is None
+            or not status.state.connected
+        ):
             return False
         if abs(status.position - value) > MATCH_TOLERANCE:
             return False
@@ -78,19 +82,14 @@ def at_preset(preset: Preset, statuses: dict[str, StageStatus]) -> bool:
 
 def blocked_reason(status: StageStatus, target: float, view: View | None = None) -> str:
     """Why a stage cannot go to ``target`` now, or "" if it can."""
-    if not status.state.connected:
-        return "not connected"
-    if status.state is State.NOT_HOMED:
-        return "not homed"
-    if status.state.busy:
-        return "moving"
-    if status.state is not State.READY:
-        return status.state.value.lower()
-    if status.allowed is None:
-        return "no allowed range"
+    if reason := status.move_block_reason:
+        return reason
+    assert status.allowed is not None
+    view = view or View("")
+    target = round(target, view.decimals)
     low, high = status.allowed
-    if not low - 1e-6 <= target <= high + 1e-6:
-        shown = (view or View("")).range_text(low, high)
+    if not low - TOLERANCE <= target <= high + TOLERANCE:
+        shown = view.range_text(low, high)
         return f"outside {shown}"
     return ""
 
@@ -126,13 +125,7 @@ class SavePresetDialog(QDialog):
         for row, status in enumerate(statuses):
             view = views[status.name]
             check = QCheckBox(view.label)
-            usable = (
-                status.position is not None
-                and status.state.connected
-                and status.state not in (State.NOT_HOMED, State.ERROR)
-                and not status.state.busy
-            )
-            if usable:
+            if status.can_save_position:
                 assert status.position is not None
                 self._positions[status.name] = status.position
                 note = QLabel(f"{view.text(status.position)} {view.units}")
@@ -140,7 +133,7 @@ class SavePresetDialog(QDialog):
                 note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 check.setChecked(True)
             else:
-                reason = "moving" if status.state.busy else status.state.value.lower()
+                reason = status.ready_block_reason or "position unknown"
                 note = QLabel(f"not saved: {reason}")
                 note.setObjectName("secondary")
                 check.setEnabled(False)
@@ -237,7 +230,9 @@ class GoToPresetDialog(QDialog):
                 last.setFont(theme.number_font(theme.BODY_PX))
             grid.addWidget(last, row, 3)
 
-        note = QLabel("The checked stages move at the same time. Make sure their paths are clear.")
+        note = QLabel(
+            "Each stage is checked again before it moves. Make sure their paths are clear."
+        )
         note.setObjectName("secondary")
         note.setWordWrap(True)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
@@ -466,13 +461,7 @@ class PresetsPanel(QFrame):
     def _update_buttons(self) -> None:
         selected = self.selected_name() is not None
         writable = self.store.writable
-        any_position = any(  # the same rule as SavePresetDialog
-            s.position is not None
-            and s.state.connected
-            and s.state not in (State.NOT_HOMED, State.ERROR)
-            and not s.state.busy
-            for s in self._statuses.values()
-        )
+        any_position = any(s.can_save_position for s in self._statuses.values())
         self.save_button.setEnabled(writable and any_position)
         self.go_button.setEnabled(selected)
         for button in (self.rename_button, self.up_button, self.down_button, self.delete_button):
@@ -518,7 +507,11 @@ class PresetsPanel(QFrame):
         dialog = GoToPresetDialog(preset, statuses, self, views)
         if self._confirm and dialog.exec() != QDialog.Accepted:
             return
-        targets = dialog.targets()
+        targets = {
+            stage: target
+            for stage, target in dialog.targets().items()
+            if not blocked_reason(self.workers[stage].status, target, views[stage])
+        }
         if not targets:
             QMessageBox.information(self, "Go to preset", "No stage in this preset can move now.")
             return
@@ -528,7 +521,7 @@ class PresetsPanel(QFrame):
             views[s].label if s in views else s for s in set(preset.positions) - set(targets)
         )
         note = f" Not moved: {', '.join(skipped)}." if skipped else ""
-        self.message.emit(f"Going to preset “{preset.name}”.{note}")
+        self.message.emit(f"Sent moves for preset “{preset.name}”.{note}")
 
     def rename_selected(self) -> None:
         old = self.selected_name()

@@ -192,7 +192,7 @@ class MainWindow(QMainWindow):
                     log.warning("%s", error)
                     axis = replace(card.axis, travel=(info.lower, info.upper))
                 self._apply_axis(card, axis)
-            speed = card.worker.speed
+            speed = status.accepted_speed
             if speed is not None and speed != card.axis.speed:
                 # The controller accepted a new speed: keep it for the next session.
                 try:

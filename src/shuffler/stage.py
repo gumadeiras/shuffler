@@ -83,5 +83,5 @@ class StageDriver(Protocol):
         ...
 
     def set_velocity(self, velocity: float) -> None:
-        """Set the speed for the next moves. The driver applies it again after a reset."""
+        """Set the speed for the next moves. The worker applies it again after a reset."""
         ...

@@ -379,7 +379,9 @@ class StageCard(QFrame):
 
         self._show_speed(status)
         self._enable(status)
-        self.error_label.setText(status.error)
+        self.error_label.setText(
+            status.error or (status.move_block_reason if state is State.READY else "")
+        )
 
     def _show_speed(self, status: StageStatus) -> None:
         """The controller's speed, unless the user is typing one."""
@@ -389,7 +391,7 @@ class StageCard(QFrame):
             else:
                 self.speed_box.setValue(status.velocity)
         units = self.config.units
-        limit = self.worker.speed_limit()
+        limit = status.speed_limit
         if limit is not None:
             ceiling = f" Maximum {limit:g} {units}/s."
         elif self.config.driver == "conex":
@@ -404,15 +406,15 @@ class StageCard(QFrame):
     def _enable(self, status: StageStatus) -> None:
         state = status.state
         connected = state.connected
-        can_move = state is State.READY and status.allowed is not None
+        can_move = not status.move_block_reason
         for widget in (self.target_box, self.go_button, self.back_button, self.forward_button):
             widget.setEnabled(can_move)
         self.step_box.setEnabled(connected)
         # Only in READY: a CONEX-CC refuses VA before homing and during motion.
-        self.speed_box.setEnabled(state is State.READY and status.velocity is not None)
+        self.speed_box.setEnabled(not status.ready_block_reason)
         self._update_speed_button()
         not_homed = state is State.NOT_HOMED
-        self.home_button.setEnabled(connected and not state.busy)
+        self.home_button.setEnabled(connected and status.contact_ok and not state.busy)
         self.home_button.setObjectName("primary" if not_homed else "")
         self.home_button.setIcon(icon("home", theme.PANEL if not_homed else theme.NAVY))
         _restyle(self.home_button)
@@ -424,7 +426,7 @@ class StageCard(QFrame):
         self.connect_button.setVisible(offline)
         self.home_button.setVisible(not offline)
         self.stop_button.setVisible(not offline)
-        self.reset_action.setEnabled(connected)
+        self.reset_action.setEnabled(connected and status.contact_ok and not state.busy)
         self.connect_action.setEnabled(offline)
         self.disconnect_action.setEnabled(connected)
 

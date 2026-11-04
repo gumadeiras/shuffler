@@ -3,9 +3,10 @@
 import unittest
 from unittest import mock
 
+from shuffler import worker as worker_module
 from shuffler.config import StageConfig
 from shuffler.fakes import FakeStage
-from shuffler.stage import Reading, State
+from shuffler.stage import DeviceError, Reading, State
 from shuffler.worker import LATCH_S, READ_FAILURE_LIMIT, StageWorker
 
 
@@ -183,6 +184,34 @@ class WorkerTest(unittest.TestCase):
         self.run_all(worker)
         self.assertIn("move_to 5", stage.commands)
 
+    def test_no_move_uses_a_reading_after_a_poll_failure(self) -> None:
+        worker, stage = self.connected_and_homed()
+        stage.fail_read = "No answer."
+        worker.tick(0)
+        worker.move_to(5.0)
+        worker.tick(0)
+        self.assertNotIn("move_to 5", stage.commands)
+        self.assertIn("contact", worker.status.error)
+        stage.fail_read = None
+        worker.tick(0)
+        worker.move_to(5.0)
+        self.run_all(worker)
+        self.assertIn("move_to 5", stage.commands)
+
+    def test_snapshot_reports_the_same_motion_block_as_the_worker(self) -> None:
+        worker, stage = self.connected_and_homed()
+        self.assertEqual(worker.status.move_block_reason, "")
+        stage.fail_read = "No answer."
+        worker.tick(0)
+        reason = worker.status.move_block_reason
+        self.assertIn("contact", reason)
+        worker.move_by(1.0)
+        worker.tick(0)
+        self.assertIn(reason, worker.status.error)
+        stage.fail_read = None
+        worker.tick(0)
+        self.assertEqual(worker.status.move_block_reason, "")
+
     def test_stop_during_a_move(self) -> None:
         worker, _stage = self.connected_and_homed()
         worker.move_to(20.0)
@@ -241,6 +270,27 @@ class WorkerTest(unittest.TestCase):
         self.run_all(worker)
         self.assertIs(worker.status.state, State.HOMING)
         self.assertNotIn("move_to 5", stage.commands)
+
+    def test_stale_position_does_not_complete_a_small_jog(self) -> None:
+        worker, stage = self.make(LaggingStage)
+        worker.connect()
+        worker.home()
+        self.run_all(worker)
+        self.settle(worker)
+        self.settle(worker)
+        worker.move_by(0.001)
+        worker.move_by(0.001)
+        self.run_all(worker)
+        self.assertEqual([c for c in stage.commands if c.startswith("move_to")], ["move_to 0.001"])
+        self.assertIs(worker.status.state, State.MOVING)
+        self.settle(worker, 0.1)
+        self.assertIs(worker.status.state, State.READY)
+        self.assertEqual(worker.status.position, 0.001)
+        worker.move_by(0.001)
+        self.run_all(worker)
+        self.settle(worker, 0.1)
+        worker.tick(0)  # the last stale report has now been consumed
+        self.assertEqual(worker.status.position, 0.002)
 
     def test_latch_expires_when_the_controller_never_reports_motion(self) -> None:
         worker, stage = self.connected_and_homed()
@@ -339,15 +389,102 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual(stage.velocity, 4.0)
         self.assertEqual(worker.status.velocity, 4.0)
 
+    def test_moves_are_blocked_until_the_speed_ceiling_is_verified(self) -> None:
+        for reported in (10.0, None, float("nan")):
+            with self.subTest(reported=reported):
+                worker, stage = self.make(max_velocity=4.0)
+                stage._homed = True
+                read_speed = (
+                    {"side_effect": DeviceError("No speed reply.")}
+                    if reported is None
+                    else {"return_value": reported}
+                )
+                with (
+                    mock.patch.object(stage, "set_velocity", side_effect=DeviceError("Refused.")),
+                    mock.patch.object(stage, "get_velocity", **read_speed),
+                ):
+                    worker.connect()
+                    self.run_all(worker)
+                    worker.move_to(20.0)
+                    self.run_all(worker)
+                    self.assertNotIn("move_to 20", stage.commands)
+                    self.assertIn("speed", worker.status.error)
+                worker.set_velocity(2.0)
+                self.run_all(worker)
+                worker.move_to(20.0)
+                self.run_all(worker)
+                self.assertIn("move_to 20", stage.commands)
+                self.assertEqual(stage.velocity, 2.0)
+
     def test_configured_velocity_obeys_the_ceiling_too(self) -> None:
         worker, stage = self.make(velocity=3.0)
         self.assertEqual(worker.speed, 3.0)
+        self.assertIsNone(worker.status.accepted_speed)
         worker.connect()
         worker.home()
         self.run_all(worker)
         self.settle(worker)
         self.assertIn("set_velocity 3", stage.commands)
         self.assertEqual(worker.status.velocity, 3.0)
+        self.assertEqual(worker.status.accepted_speed, 3.0)
+
+    def test_unknown_speed_retries_at_a_bounded_interval(self) -> None:
+        worker, stage = self.connected_and_homed(max_velocity=4.0)
+        with mock.patch.object(
+            stage, "get_velocity", side_effect=DeviceError("No speed reply.")
+        ) as read:
+            worker.set_velocity(2.0)
+            worker.tick(0)
+            self.assertIsNone(worker.status.velocity)
+            self.assertIn("speed", worker.status.move_block_reason)
+            for _ in range(3):
+                worker.tick(0)
+            self.clock.now += worker_module.VELOCITY_RETRY_S / 2
+            worker.tick(0)
+            self.assertEqual(read.call_count, 1)
+            self.clock.now += worker_module.VELOCITY_RETRY_S / 2
+            worker.tick(0)
+            self.assertEqual(read.call_count, 2)
+        with mock.patch.object(stage, "get_velocity", wraps=stage.get_velocity) as read:
+            self.clock.now += worker_module.VELOCITY_RETRY_S
+            worker.tick(0)
+            self.assertEqual(worker.status.velocity, 2.0)
+            self.assertEqual(worker.status.move_block_reason, "")
+            self.clock.now += worker_module.VELOCITY_RETRY_S
+            worker.tick(0)
+            read.assert_called_once()
+        self.assertEqual([c for c in stage.commands if c == "set_velocity 2"], ["set_velocity 2"])
+
+    def test_failed_startup_read_does_not_replace_an_accepted_speed_with_the_ceiling(self) -> None:
+        worker, stage = self.make(velocity=2.0, max_velocity=4.0)
+        stage._homed = True
+        with mock.patch.object(stage, "get_velocity", side_effect=DeviceError("No speed reply.")):
+            worker.connect()
+            self.run_all(worker)
+        self.assertEqual(stage.commands, ["open", "set_velocity 2"])
+        self.assertIsNone(worker.status.velocity)
+        self.assertEqual(worker.status.accepted_speed, 2.0)
+        self.assertIn("speed", worker.status.move_block_reason)
+        self.clock.now += worker_module.VELOCITY_RETRY_S
+        worker.tick(0)
+        self.assertEqual(worker.status.velocity, 2.0)
+        self.assertEqual(worker.status.move_block_reason, "")
+
+    def test_speed_retry_waits_until_the_stage_is_ready(self) -> None:
+        worker, stage = self.connected_and_homed()
+        with mock.patch.object(stage, "get_velocity", side_effect=DeviceError("No speed reply.")):
+            worker.set_velocity(2.0)
+            worker.tick(0)
+        worker.move_to(20.0)
+        worker.tick(0)
+        with mock.patch.object(stage, "get_velocity", wraps=stage.get_velocity) as read:
+            self.clock.now += worker_module.VELOCITY_RETRY_S
+            worker.tick(0)
+            self.assertIs(worker.status.state, State.MOVING)
+            read.assert_not_called()
+            self.settle(worker)
+            read.assert_called_once()
+        self.assertEqual(worker.status.velocity, 2.0)
 
     def test_speed_needs_a_homed_still_stage(self) -> None:
         worker, stage = self.make()
@@ -396,6 +533,7 @@ class WorkerTest(unittest.TestCase):
         self.run_all(worker)
         self.assertIn("refused VA", worker.status.error)
         self.assertEqual(stage.velocity, 0.5)
+        self.assertEqual(worker.status.accepted_speed, 0.5)
 
     def test_reset_requires_homing_again(self) -> None:
         worker, _ = self.connected_and_homed()

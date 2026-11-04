@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -21,7 +22,7 @@ from shuffler.gui.app import MainWindow
 from shuffler.gui.fly import FlyWidget
 from shuffler.gui.presets_panel import GoToPresetDialog, SavePresetDialog, at_preset
 from shuffler.presets import PresetStore
-from shuffler.stage import State
+from shuffler.stage import DeviceError, State
 from shuffler.worker import StageWorker
 
 APP = QApplication.instance() or QApplication([])
@@ -249,6 +250,95 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(dialog.positions(), {})
         self.assertFalse(dialog.checks["X"].isEnabled())
 
+    def test_poll_failure_blocks_controls_and_presets_until_contact_recovers(self) -> None:
+        self.ready()
+        worker = self.workers[0]
+        preset = self.store.save("Rest", {"X": 0.0})
+        self.fakes["X"].fail_read = "No answer."
+        worker.tick(0)
+        self.window.refresh()
+        self.assertFalse(self.card("X").go_button.isEnabled())
+        self.assertFalse(self.card("X").forward_button.isEnabled())
+        self.assertIn("contact", self.card("X").error_label.text())
+        statuses = {w.name: w.status for w in self.workers}
+        go = GoToPresetDialog(preset, statuses, self.window)
+        self.assertEqual(go.targets(), {})
+        self.assertFalse(at_preset(preset, statuses), "a stale position must not mark a preset")
+        save = SavePresetDialog(list(statuses.values()), self.window)
+        self.assertNotIn("X", save.positions())
+        self.fakes["X"].fail_read = None
+        worker.tick(0)
+        self.window.refresh()
+        self.assertTrue(self.card("X").go_button.isEnabled())
+        go = GoToPresetDialog(preset, {w.name: w.status for w in self.workers}, self.window)
+        self.assertEqual(go.targets(), {"X": 0.0})
+
+    def test_speed_block_is_shared_by_controls_preview_and_worker(self) -> None:
+        worker = self.workers[0]
+        worker.config = replace(worker.config, max_velocity=4.0)
+        with mock.patch.object(
+            self.fakes["X"], "set_velocity", side_effect=DeviceError("Refused.")
+        ):
+            self.ready()
+        preset = self.store.save("Both", {"X": 5.0, "Z": 5.0})
+        statuses = {w.name: w.status for w in self.workers}
+        go = GoToPresetDialog(preset, statuses, self.window)
+        self.assertEqual(go.targets(), {"Z": 5.0})
+        self.assertFalse(self.card("X").go_button.isEnabled())
+        self.assertTrue(self.card("X").speed_box.isEnabled(), "a valid speed can repair the block")
+        worker.move_to(5.0)
+        self.run_all()
+        self.assertNotIn("move_to 5", self.fakes["X"].commands)
+        self.window.presets.refresh(select="Both")
+        self.window.presets.go_to_selected()
+        self.run_all()
+        self.assertIn("Not moved: X", self.window.status_label.text())
+        self.assertIn("move_to 5", self.fakes["Z"].commands)
+        worker.set_velocity(2.0)
+        self.run_all()
+        self.assertTrue(self.card("X").go_button.isEnabled())
+
+    def test_preset_rechecks_contact_after_the_confirmation_dialog(self) -> None:
+        self.ready()
+        self.store.save("Both", {"X": 5.0, "Z": 5.0})
+        panel = self.window.presets
+        panel.refresh(select="Both")
+        panel._confirm = True
+
+        def lose_contact(_dialog: GoToPresetDialog) -> int:
+            self.fakes["X"].fail_read = "No answer."
+            self.workers[0].tick(0)
+            return QDialog.Accepted
+
+        with mock.patch.object(GoToPresetDialog, "exec", lose_contact):
+            panel.go_to_selected()
+        self.assertTrue(self.workers[0]._commands.empty())
+        self.run_all()
+        self.assertIn("Not moved: X", self.window.status_label.text())
+        self.assertIn("move_to 5", self.fakes["Z"].commands)
+
+    def test_preset_boundary_uses_the_same_rounding_as_the_worker(self) -> None:
+        self.ready()
+        panel = self.window.presets
+        preset = self.store.save("Edge", {"X": 20.00004})
+        go = GoToPresetDialog(
+            preset, {w.name: w.status for w in self.workers}, self.window, panel.views()
+        )
+        self.assertEqual(go.targets(), {"X": 20.00004})
+        panel.refresh(select="Edge")
+        panel.go_to_selected()
+        self.run_all()
+        self.settle()
+        self.assertEqual(self.workers[0].status.position, 20.0)
+        preset = self.store.save("Outside", {"X": 20.00006})
+        go = GoToPresetDialog(
+            preset, {w.name: w.status for w in self.workers}, self.window, panel.views()
+        )
+        self.assertEqual(go.targets(), {})
+        self.workers[0].move_to(20.00006)
+        self.run_all()
+        self.assertIn("outside the allowed range", self.workers[0].status.error)
+
     # -- names, directions, order -----------------------------------------------------------
 
     def test_name_a_stage_in_the_window(self) -> None:
@@ -359,6 +449,35 @@ class WindowTest(unittest.TestCase):
         saved = AxisStore(self.app_config.axes_path, self.app_config.stage_names)
         self.assertEqual(saved.get("Z").speed, 20.0)
 
+    def test_startup_speed_is_saved_only_after_the_controller_accepts_it(self) -> None:
+        self.window.timer.stop()
+        self.window.deleteLater()
+        settings = replace(self.app_config.stages[0], velocity=3.0)
+        self.fakes["X"] = FakeStage("COM3", conex=True, velocity=2.0, clock=self.clock)
+        worker = StageWorker(settings, lambda _c: self.fakes["X"], clock=self.clock)
+        self.workers = [worker]
+        self.window = self.new_window(self.workers, "startup.ini")
+
+        def saved_speed() -> float | None:
+            return AxisStore(self.app_config.axes_path, self.app_config.stage_names).get("X").speed
+
+        self.assertIsNone(saved_speed())
+        self.assertNotIn("speed set", self.window.status_label.text())
+        self.ready()
+        self.assertIn("not applied", worker.status.error)
+        self.assertEqual(worker.status.velocity, 2.0)
+        self.assertIsNone(saved_speed())
+        self.assertNotIn("speed set", self.window.status_label.text())
+        changed = StageWorker(replace(settings, velocity=1.0), lambda _c: self.fakes["X"])
+        again = self.new_window([changed], "startup-again.ini")
+        self.addCleanup(again.deleteLater)
+        self.addCleanup(again.timer.stop)
+        self.assertEqual(changed.speed, 1.0, "a refused startup value must not override new config")
+        worker.set_velocity(1.0)
+        self.run_all()
+        self.assertEqual(saved_speed(), 1.0)
+        self.assertIn("speed set to 1", self.window.status_label.text())
+
     def test_a_much_faster_speed_asks_first(self) -> None:
         self.ready()
         card = self.card("X")  # 10 mm/s now
@@ -369,6 +488,35 @@ class WindowTest(unittest.TestCase):
         ask.assert_called_once()
         self.run_all()
         self.assertEqual(self.workers[0].status.velocity, 10.0)
+
+    def test_speed_can_be_set_when_the_previous_speed_is_unknown(self) -> None:
+        self.ready()
+        worker = self.workers[0]
+        worker._set(velocity=None)
+        self.window.refresh()
+        card = self.card("X")
+        self.assertTrue(card.speed_box.isEnabled())
+        card.speed_box.setText("2")
+        card.speed_box.textEdited.emit("2")
+        card.speed_button.click()
+        self.run_all()
+        self.assertEqual(worker.status.velocity, 2.0)
+
+    def test_speed_read_recovery_enables_controls_without_another_speed_command(self) -> None:
+        worker = self.workers[0]
+        worker.config = replace(worker.config, max_velocity=4.0)
+        self.ready()
+        with mock.patch.object(
+            self.fakes["X"], "get_velocity", side_effect=DeviceError("No speed reply.")
+        ):
+            worker.set_velocity(2.0)
+            self.run_all()
+        self.assertFalse(self.card("X").go_button.isEnabled())
+        self.clock.now += 1.0
+        self.run_all()
+        self.assertTrue(self.card("X").go_button.isEnabled())
+        self.assertEqual(self.card("X").speed_box.text(), "2.000")
+        self.assertEqual(self.fakes["X"].commands.count("set_velocity 2"), 1)
 
     def test_travel_bar_is_a_readout(self) -> None:
         from PySide6.QtCore import Qt
