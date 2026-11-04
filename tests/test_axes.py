@@ -113,6 +113,25 @@ class AxisStoreTest(unittest.TestCase):
             },
         )
 
+    def test_invalid_settings_are_not_used_or_overwritten(self) -> None:
+        cases = (
+            b"\xff",
+            b'{"axes":{"CONEX A":{"reversed":"false","travel":[0,25]}}}',
+            b'{"order":["CONEX A","CONEX A"]}',
+            b'{"order":"CONEX A"}',
+            b'{"axes":{"CONEX A":{"travel":[true,25]}}}',
+        )
+        for original in cases:
+            with self.subTest(original=original):
+                self.path.write_bytes(original)
+                store = AxisStore(self.path, KEYS)
+                self.assertFalse(store.writable)
+                self.assertFalse(store.get("CONEX A").reversed)
+                self.assertEqual(store.order(), list(KEYS))
+                with self.assertRaises(AxisError):
+                    store.update("CONEX A", label="X")
+                self.assertEqual(self.path.read_bytes(), original)
+
     def test_speed_persists(self) -> None:
         store = AxisStore(self.path, KEYS)
         store.remember_speed("DDS100", 12.5)

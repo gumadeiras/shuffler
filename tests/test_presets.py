@@ -67,6 +67,26 @@ class PresetStoreTest(unittest.TestCase):
         self.assertEqual(data["presets"][0]["name"], "A")
         self.assertEqual(data["presets"][0]["positions"], {"X": 1.5})
 
+    def test_invalid_presets_are_not_used_or_overwritten(self) -> None:
+        cases = (
+            b"\xff",
+            b'{"presets":[{"name":"P","positions":{"X":NaN}}]}',
+            b'{"presets":[{"name":"P","positions":{"X":1e400}}]}',
+            b'{"presets":[{"name":"P","positions":{"X":true}}]}',
+            b'{"presets":[{"name":"P","positions":{"X":"2"}}]}',
+            b'{"presets":[{"name":"P","positions":{}}]}',
+            (b'{"presets":[{"name":"P","positions":{"X":1}},{"name":"P","positions":{"X":2}}]}'),
+        )
+        for original in cases:
+            with self.subTest(original=original):
+                self.path.write_bytes(original)
+                store = PresetStore(self.path)
+                self.assertFalse(store.writable)
+                self.assertEqual(store.presets, [])
+                with self.assertRaises(PresetError):
+                    store.save("New", {"X": 1.0})
+                self.assertEqual(self.path.read_bytes(), original)
+
 
 if __name__ == "__main__":
     unittest.main()

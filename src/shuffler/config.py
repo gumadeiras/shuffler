@@ -77,6 +77,8 @@ def load(path: Path) -> AppConfig:
             f"The configuration file {path} does not exist. "
             "Copy stages.toml.example to stages.toml and edit it."
         ) from None
+    except (OSError, UnicodeError) as error:
+        raise ConfigError(f"Cannot read {path}: {error}") from None
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:

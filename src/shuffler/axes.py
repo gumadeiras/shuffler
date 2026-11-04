@@ -162,7 +162,7 @@ class AxisStore:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return
-        except OSError as error:
+        except (OSError, UnicodeError) as error:
             raise AxisError(f"Cannot read {self.path}: {error}") from None
         try:
             data = json.loads(text)
@@ -170,25 +170,42 @@ class AxisStore:
             for key, item in data.get("axes", {}).items():
                 travel = item.get("travel")
                 if travel is not None:
+                    if not isinstance(travel, list) or any(
+                        isinstance(v, bool) or not isinstance(v, int | float) for v in travel
+                    ):
+                        raise ValueError(f"bad travel for {key}")
                     low, high = (float(v) for v in travel)
                     if not (math.isfinite(low) and math.isfinite(high) and low < high):
                         raise ValueError(f"bad travel for {key}")
                     travel = (low, high)
-                direction = str(item.get("direction", "none"))
+                direction = item.get("direction", "none")
+                if not isinstance(direction, str) or direction not in DIRECTIONS:
+                    raise ValueError(f"bad direction for {key}")
+                reversed_axis = item.get("reversed", False)
+                if not isinstance(reversed_axis, bool):
+                    raise ValueError(f"bad reverse setting for {key}")
                 speed = item.get("speed")
                 if speed is not None:
+                    if isinstance(speed, bool) or not isinstance(speed, int | float):
+                        raise ValueError(f"bad speed for {key}")
                     speed = float(speed)
                     if not (math.isfinite(speed) and speed > 0):
                         raise ValueError(f"bad speed for {key}")
                 axes[str(key)] = Axis(
                     label=str(item.get("label", key)),
-                    direction=direction if direction in DIRECTIONS else "none",
-                    reversed=bool(item.get("reversed", False)) and travel is not None,
+                    direction=direction,
+                    reversed=reversed_axis and travel is not None,
                     travel=travel,
                     speed=speed,
                 )
-            order = [str(k) for k in data.get("order", [])]
-        except (ValueError, TypeError, AttributeError) as error:
+            order = data.get("order", [])
+            if (
+                not isinstance(order, list)
+                or not all(isinstance(k, str) for k in order)
+                or len(set(order)) != len(order)
+            ):
+                raise ValueError("bad card order")
+        except (ValueError, TypeError, AttributeError, OverflowError) as error:
             raise AxisError(
                 f"{self.path.name} is damaged ({error}). Stage names and directions cannot "
                 "be changed until the file is repaired or moved away."

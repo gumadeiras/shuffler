@@ -96,19 +96,32 @@ class PresetStore:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return []
-        except OSError as error:
+        except (OSError, UnicodeError) as error:
             raise PresetError(f"Cannot read {self.path}: {error}") from None
         try:
             data = json.loads(text)
-            presets = [
-                Preset(
-                    str(item["name"]),
-                    {str(k): float(v) for k, v in item["positions"].items()},
-                    str(item.get("saved", "")),
-                )
-                for item in data["presets"]
-            ]
-        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            presets = []
+            names = set()
+            for item in data["presets"]:
+                name = _clean_name(item["name"])
+                if name in names:
+                    raise ValueError(f"duplicate preset {name!r}")
+                names.add(name)
+                positions = item["positions"]
+                if not positions or any(
+                    isinstance(v, bool) or not isinstance(v, int | float) or not math.isfinite(v)
+                    for v in positions.values()
+                ):
+                    raise ValueError(f"bad positions for {name!r}")
+                presets.append(Preset(name, positions, str(item.get("saved", ""))))
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            OverflowError,
+            PresetError,
+        ) as error:
             raise PresetError(
                 f"{self.path.name} is damaged ({error}). Presets are read-only until the "
                 "file is repaired or moved away."

@@ -183,6 +183,14 @@ class ConexTest(unittest.TestCase):
         self.assertIs(reading.state, State.MOVING)
         self.assertIn("Following error", reading.detail)
 
+    def test_nonfinite_position_is_a_read_failure(self) -> None:
+        self.stage.open()
+        for position in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(position=position):
+                self.port.position = position
+                with self.assertRaisesRegex(DeviceError, "Unexpected answer"):
+                    self.stage.read()
+
     def test_move_absolute(self) -> None:
         self.stage.open()
         self.stage.move_to(12.5)

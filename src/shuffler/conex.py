@@ -14,6 +14,7 @@ stored limits.
 """
 
 import contextlib
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -305,9 +306,12 @@ class ConexStage:
     def _query_number(self, code: str) -> float:
         value = self._query(code)
         try:
-            return float(value)
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError
         except ValueError:
             raise DeviceError(f"Unexpected answer from {self.port} to {code}: {value!r}.") from None
+        return number
 
     def _command(self, code: str) -> None:
         """Send a command and raise if the controller refused it.

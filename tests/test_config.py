@@ -36,6 +36,15 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "Copy stages.toml.example"):
             config.load(Path(tempfile.gettempdir()) / "no-such-shuffler.toml")
 
+    def test_unreadable_configuration_is_a_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "stages.toml"
+            path.write_bytes(b"\xff")
+            with self.assertRaisesRegex(ConfigError, "Cannot read"):
+                config.load(path)
+            with self.assertRaisesRegex(ConfigError, "Cannot read"):
+                config.load(Path(folder))
+
     def test_errors(self) -> None:
         cases = {
             "Add at least one": {},
