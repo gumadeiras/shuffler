@@ -5,6 +5,8 @@
 One window for Newport CONEX-CC and Thorlabs Kinesis stages.
 Move each stage, set its speed, and save positions as presets.
 
+Don't like flies? Try [sniffler](https://github.com/gumadeiras/sniffler).
+
 ![shuffler with three simulated stages and saved presets](docs/assets/shuffler-ui.png)
 
 ## Setup
