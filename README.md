@@ -1,3 +1,5 @@
+<img src="docs/assets/fly.gif" width="168" height="104" alt="everyday im shuffling">
+
 # shuffler
 
 One window for Newport CONEX-CC and Thorlabs Kinesis stages.
@@ -39,11 +41,5 @@ Only uv is needed for the demo; Kinesis is not required.
 ```powershell
 uv run shuffler-gui --demo
 ```
-
-## The fly
-
-<img src="docs/assets/fly.gif" width="168" height="104" alt="The shuffler fly sleeps, shuffles, grooms, and jumps">
-
-It shuffles while stages move, grooms when they stop, and jumps on **Stop all**.
 
 [Controls, safety, and troubleshooting](docs/guide.md) · [Development](docs/development.md)
